@@ -98,6 +98,12 @@ plan); the dedicated planner package lands in phase 2.
   [tool-parameters.md](tool-parameters.md).
 - **`internal/machine`** — portable machine + post-processor config (JSON). See
   [gcode.md](gcode.md).
+- **fixture / workholding** — keep-out zones (clamps, vise jaws, no-go regions)
+  the tool must never touch (ADR-012). See [workholding.md](workholding.md).
+
+A complete, shareable **setup is a recipe**: `part + stock + fixture + tool +
+machine`, all portable JSON. That recipe is the unit the planner and the
+collision check consume, and the unit a shop keeps and moves.
 
 ## Data flow, concretely
 

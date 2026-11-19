@@ -1,0 +1,33 @@
+{
+  "id": "clamp-setup-100x60",
+  "name": "100x60 part in a vise with front/back jaws and one edge clamp",
+  "keep_out": [
+    {
+      "type": "box",
+      "box": { "min": { "x": -20, "y": -20, "z": 0 }, "max": { "x": 120, "y": -5, "z": 20 } },
+      "note": "vise jaw (front) — never enter"
+    },
+    {
+      "type": "box",
+      "box": { "min": { "x": -20, "y": 65, "z": 0 }, "max": { "x": 120, "y": 80, "z": 20 } },
+      "note": "vise jaw (back) — never enter"
+    },
+    {
+      "type": "box",
+      "box": { "min": { "x": 40, "y": 24, "z": 8 }, "max": { "x": 60, "y": 36, "z": 30 } },
+      "note": "edge clamp over a tab — keep clear"
+    }
+  ],
+  "workholding": [
+    {
+      "type": "box",
+      "box": { "min": { "x": -20, "y": -20, "z": 0 }, "max": { "x": 120, "y": -5, "z": 20 } },
+      "note": "vise jaw (front) solid"
+    },
+    {
+      "type": "box",
+      "box": { "min": { "x": -20, "y": 65, "z": 0 }, "max": { "x": 120, "y": 80, "z": 20 } },
+      "note": "vise jaw (back) solid"
+    }
+  ]
+}

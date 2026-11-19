@@ -416,3 +416,51 @@ rather than guess.
 - Adding 3D is "new modules + a plane field on arcs," not a re-architecture.
 
 **Related.** ADR-001 (canonical frame), ADR-002 (analytic curves), ADR-003 (format).
+
+---
+
+## ADR-012 — Keep-out zones (workholding) are hard safety volumes (Accepted)
+
+**Context.** In a real setup the part sits in stock, held by clamps, a vise,
+tabs, or a fixture. The tool must never touch those — a collision with an edge
+clamp or a vise jaw destroys the tool, the clamp, and usually the part, and can be
+a safety hazard. This is a distinct, first-class concern from "don't cut the
+part": it is *additional* geometry the tool must avoid, positioned relative to the
+stock/setup. We want to declare such no-go regions once, portably, and have every
+downstream stage respect them.
+
+**Decision.**
+
+1. **A keep-out zone is a volume in the canonical WCS** (relative to the
+   stock/setup origin) that the **tool envelope** must never enter. Volumes are
+   simple, portable solids: box (clamps, vise jaws), cylinder, prism, or a solid
+   mesh (complex fixtures). They are declared in a **fixture/workholding config**
+   (portable JSON), not hard-coded.
+2. **It is a hard constraint, not a soft preference.** A violation is a
+   program-level error (the program is rejected / flagged), not a warning. This
+   generalises ADR-010's "never over-cut the part" to "never touch any keep-out
+   volume (part, fixture, or an explicit no-go region)."
+3. **It is enforced in two places:**
+   - **Planning** routes around keep-out volumes: safe entry/exit points, retract
+     heights above the fixture, adaptive paths that don't dive into a clamp region.
+   - **Collision check** (phase 4) verifies the tool envelope at every point of
+     the whole program never intersects any keep-out volume or the kept part
+     volume. This is a dry-run gate before emission.
+4. **The setup is a portable recipe.** A complete, shareable setup is
+   `part + stock + fixture(keep-out) + tool + machine`, all portable JSON. This
+   is the unit a shop keeps and moves, and the unit the planner and collision
+   check consume. The tool and machine configs already exist; the fixture config
+   is the new piece.
+
+**Consequences.**
+
+- "Don't hit the clamp" is a declared, portable, verifiable property — not a
+  hope.
+- The collision check is a well-defined predicate (tool envelope vs. a set of
+  volumes) and is independently testable (a toolpath that clips a keep-out box is
+  rejected; one that clears it is accepted).
+- Adding a clamp to the setup is a data change (a new keep-out volume), not a code
+  change (ADR-007).
+
+**Related.** ADR-001 (canonical frame), ADR-010 (never over-cut), ADR-011 (tool
+envelope), ADR-007 (config as data).

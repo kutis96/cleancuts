@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/kutis96/cleancuts/schemas/fixture.schema.json",
+  "title": "CleanCuts fixture (workholding)",
+  "description": "Workholding and keep-out zones for a setup. Keep-out volumes are the no-go regions the tool envelope must never enter (clamps, vise jaws, tabs, explicit no-go zones). All geometry is the canonical WCS (right-handed, Z-up, millimetres), relative to the stock/setup origin. See ADR-012.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "Stable fixture identifier." },
+    "name": { "type": "string", "description": "Human-readable name." },
+    "keep_out": {
+      "type": "array",
+      "description": "Volumes the tool envelope must NEVER enter (hard safety constraint).",
+      "items": { "$ref": "#/definitions/volume" }
+    },
+    "workholding": {
+      "type": "array",
+      "description": "Optional: the actual fixture solids, for collision and visualization.",
+      "items": { "$ref": "#/definitions/volume" }
+    }
+  },
+  "definitions": {
+    "volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["box", "cylinder", "mesh"] },
+        "box": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "description": "Axis-aligned box by opposite corners (WCS).",
+          "properties": {
+            "min": { "$ref": "#/definitions/point" },
+            "max": { "$ref": "#/definitions/point" }
+          }
+        },
+        "cylinder": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["center", "axis", "radius", "length"],
+          "description": "Finite cylinder: base centre, axis direction, radius, length (WCS).",
+          "properties": {
+            "center": { "$ref": "#/definitions/point", "description": "Base centre of the cylinder." },
+            "axis": { "$ref": "#/definitions/point", "description": "Axis direction (need not be unit)." },
+            "radius": { "type": "number", "exclusiveMinimum": 0 },
+            "length": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "mesh": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file"],
+          "description": "Complex fixture as a solid mesh in the canonical frame.",
+          "properties": {
+            "file": { "type": "string", "description": "Relative path to a solid mesh (STL/3MF)." }
+          }
+        },
+        "note": { "type": "string", "description": "e.g. 'vise jaw (front)', 'edge clamp over tab'." }
+      },
+      "oneOf": [
+        { "required": ["type", "box"] },
+        { "required": ["type", "cylinder"] },
+        { "required": ["type", "mesh"] }
+      ]
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+    }
+  }
+}

@@ -54,17 +54,22 @@ Goal: machine a real part's 2D features correctly.
       fillet corner joins. This is the highest-risk, highest-value piece — it gets
       its own heavily-tested module (a new ADR if it introduces a robust-geometry
       layer).
-- [ ] **Climb/conventional:** derive the milling mode per contour
-      (rotation + travel + material side), with global/per-operation/per-path
-      overrides (ADR-005).
-- [ ] **Operation planner (first cut):** map part + stock + tool to an ordered
-      list of operations (profile/pocket/face) and strategies.
+- [ ] **Climb/conventional:** the planner chooses the milling mode per contour
+      (rotation + travel + material side) **before generation** and fixes the
+      traversal direction that achieves it (ADR-009); global / per-operation /
+      per-path overrides (ADR-005).
+- [ ] **Keep-out routing (ADR-012):** planning routes entry/exit/retracts and
+      passes around the fixture's keep-out volumes (clamps, vise jaws) so the
+      tool envelope never enters them — a hard constraint, verified, not hoped.
+- [ ] **Operation planner (first cut):** map `part + stock + fixture + tool`
+      to an ordered list of operations (profile/pocket/face) and strategies.
 - [ ] **Config loading in the CLI:** `cleancuts generate --part … --stock …
-      --tool … --machine …` producing `.moves.json` and `.nc`.
+      --fixture … --tool … --machine …` producing `.moves.json` and `.nc`.
 
 **Exit criterion:** import a real STL part, plan its 2D features, offset by a
-real tool, apply the correct milling mode, and emit G-code that a simulator
-(e.g. a G-code simulator or the friend's machine dry-run) accepts without
+real tool, apply the correct milling mode, route around the declared keep-out
+volumes, and emit G-code that a simulator (or the friend's machine dry-run)
+accepts without
 crashing — with the intermediate `.moves.json` inspectable.
 
 ---
@@ -106,8 +111,10 @@ over-cutting the part** (ADR-010).
       out; it does not re-route the path.
 - [ ] **Dry-run bounds checks** against axis travel; clear, early errors if a
       path would exceed travel.
-- [ ] **Collision check** of the tool *envelope* (not just centre) against the
-      kept volume and workholding, over the whole program.
+- [ ] **Collision gate (ADR-012):** verify the tool *envelope* (not just centre)
+      never intersects the kept-part volume **or any keep-out zone** (clamps,
+      vise jaws) over the whole program; a violation rejects the program with a
+      precise (move, volume, point) message. A dry-run gate before emission.
 - [ ] **Backlash compensation** for conventional milling where the machine
       config requires it.
 
