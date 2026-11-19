@@ -18,16 +18,7 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: gofmt check
-        run: |
-          files=$(gofmt -l .)
-          if [ -n "$files" ]; then echo "gofmt needed on:"; echo "$files"; exit 1; fi
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: go test
-        run: go test ./...
-
-      - name: go build
-        run: go build ./...
+      # The same script that runs locally (`make ci` or `sh scripts/ci.sh`),
+      # so CI and local are identical.
+      - name: CI (gofmt, vet, test, build)
+        run: sh scripts/ci.sh

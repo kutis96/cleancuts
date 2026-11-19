@@ -1,9 +1,14 @@
 GO ?= go
 
-.PHONY: all build test vet fmt fmtcheck tidy demo clean
+.PHONY: all ci build test vet fmt fmtcheck tidy demo clean
 
-## all: build, test, and vet (the default target).
-all: build test vet
+## all: run the full portable check (the default target).
+all: ci
+
+## ci: the single source of truth for "is the repo healthy" — gofmt, vet, test,
+## and build — via scripts/ci.sh, so local and GitHub CI run the exact same thing.
+ci:
+	sh scripts/ci.sh
 
 ## build: compile the whole module.
 build:

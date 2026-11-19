@@ -164,5 +164,21 @@ cleancuts/
 
 This repository lives at **`github.com/kutis96/cleancuts`**.
 
+## Verify (locally or CI)
+
+The full health check is a single portable script — no Make dependency, and it's
+the same thing GitHub Actions runs:
+
+```sh
+make ci            # or:
+sh scripts/ci.sh   # gofmt check + go vet + go test + go build
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
 See [AGENTS.md](AGENTS.md) for how to work in this codebase, and
 [docs/roadmap.md](docs/roadmap.md) for where we're headed.

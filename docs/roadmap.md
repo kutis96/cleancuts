@@ -168,14 +168,25 @@ Goal: a nice face on the core.
 - **Precision:** any new geometry primitive gets its tolerance model and its
   degenerate-case tests (ADR-006) at the same time it is written.
 
-## Open questions (need a decision, not just work)
+## Resolved decisions
 
-1. **Mesh-first vs. B-rep.** v1 is mesh-first (STL/3MF). Is a native B-rep
-   (e.g. a CAD kernel) ever a hard requirement, or is high-quality mesh input +
-   analytic toolpaths sufficient for the target work?
-2. **Module path.** ✅ **Resolved** — `github.com/kutis96/cleancuts` (the Go
-   module path and schema `$id`s now point there).
-3. **License.** No license is committed yet. Choose one (MIT is the working
-   default) before external contributors show up.
-4. **CI host.** A GitHub Actions workflow is included as a default. Confirm the
-   host (GitHub / GitLab / other) or we can swap it.
+- **Module path** — ✅ `github.com/kutis96/cleancuts` (Go module + schema `$id`s).
+- **License** — ✅ **MIT** (see [LICENSE](../LICENSE)); copyright holder is the
+  git identity ("The Spacecat") and can be swapped for a preferred legal name.
+- **CI host** — ✅ **GitHub Actions**, with the check factored into a portable,
+  locally-runnable script (`scripts/ci.sh`; `make ci`) so local and CI are
+  identical and it needs no Make dependency.
+- **Input geometry** — ✅ **mesh-first (STL/3MF).** High-quality mesh + analytic
+  toolpaths is sufficient for v1 and matches how mainstream CAM generates 2.5D
+  and 3D paths (even B-rep-based CAM tessellates internally for toolpaths).
+
+## Deferred / future (not v1, not a blocker)
+
+- **Native B-rep import.** A real boundary-representation kernel is a large,
+  hard subsystem — robust topology, analytic + NURBS surfaces, and (the hard part)
+  robust booleans/sectioning/offsetting. It *is* more accurate (exact edges,
+  exact booleans), but building one is its own multi-year effort. The pragmatic
+  path, if we ever want it, is to **integrate a mature kernel (e.g. OpenCASCADE)
+  at the import boundary** rather than build one — which fits our "boundary module
+  normalises into the canonical frame" design (ADR-001) and keeps the core
+  dependency-free. For now, high-quality mesh in is the right call.
