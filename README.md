@@ -1,5 +1,8 @@
 # CleanCuts
 
+> **Resuming after a context reset / compaction?** Start with [HANDOVER.md](HANDOVER.md)
+> — the session-state snapshot (where we are, what's next, how to verify).
+
 CleanCuts is a CAM (computer-aided manufacturing) core for 2.5D — and eventually
 full 3D — machining on CNC mills. It takes a part model (mesh or B-rep), a
 material block, and a tool, and produces verified G-code.

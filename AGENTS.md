@@ -1,5 +1,9 @@
 # AGENTS.md — working agreement for AI agents (and humans)
 
+> **Resuming after a context reset / compaction?** Read [HANDOVER.md](HANDOVER.md)
+> first — it's the session-state snapshot (where we are, what's next, the user's
+> context). Then verify with `make ci`. This file is the durable working agreement.
+
 You are working on **CleanCuts**, a CAM core in Go with zero external
 dependencies in `internal/`. Read this before making changes. The goal is that
 any capable agent can make a correct, well-tested, well-documented change without
