@@ -43,18 +43,30 @@ done), "start the GUI" (out of the core's scope).
 1. **Read first.** `AGENTS.md`, the relevant ADRs, and the doc for the area you're
    touching. Confirm the current phase in `roadmap.md`.
 2. **State the slice** in 2–3 sentences: what, which stage, definition of done.
-3. **Write the tests** (table-driven) that express the definition of done.
-4. **Implement** until the tests pass and the four commands are green
+3. **Specify the model first** (design-first): if the slice adds or changes a
+   decision, write/extend the ADR and the relevant `docs/` section *before*
+   coding. The design is the durable artifact; the code follows it.
+4. **Write the tests** (table-driven) that express the definition of done.
+5. **Implement** until the tests pass and the four commands are green
    (`gofmt -l .`, `go vet ./...`, `go test ./...`, `go build ./...`).
-5. **Update the docs** for the change (operations/architecture/ADR as needed).
-6. **Summarize** the change: what/why/which invariant, and any follow-up slice it
-   enables.
+6. **Update the docs** for the change (operations/architecture/ADR as needed).
+7. **Commit as a handoff checkpoint** (see below), then **summarize**:
+   what/why/which invariant, and any follow-up slice it enables.
 
 ### Verification commands (run and report all four)
 
 ```sh
 gofmt -l . && go vet ./... && go test ./... && go build ./...
 ```
+
+### Commits are handoff checkpoints
+
+The repo lives at `github.com/kutis96/cleancuts`. Commit **as you go**, one focused
+slice per commit, only at a green checkpoint (all four commands pass). A working,
+committed state on `main` is the safety net against context loss: a compaction or
+a new agent should find a green build plus docs/ADRs that capture the decisions,
+not a wall of uncommitted, possibly-broken work. Use `bionic/…` branches for
+risky work and keep `main` shippable. Full convention: see [AGENTS.md](../AGENTS.md).
 
 If any fails, fix before claiming done. Paste the (short) tail of the test output
 in the summary so a reviewer can see it without re-running.

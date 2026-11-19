@@ -154,7 +154,15 @@ cleancuts/
 - **Composable stages.** Generation, compensation, and post-processing are separate.
 - **Explicit invariants.** Every public type has a `Validate()` with precise errors.
 - **Portable config.** Tools and machines are JSON; the core has no third-party deps.
-- **Tested and documented.** Table-driven tests, an ADR log, and agent-facing docs.
+- **Never over-cut.** Smoothing and motion are clearance-safe: the safe failure is
+  leaving stock, never cutting into the part; feed/rapid limits are always respected.
+- **3D-ready by design.** The spine, format, and tool model are the same 3D will
+  use; the tool is a tip envelope `r(z)`; surface quality is configuration.
+- **Design first, tested and documented.** Decisions live in an ADR log and docs
+  before they're implemented; table-driven tests pin the behaviour. Built for
+  handoff to both humans and agents.
+
+This repository lives at **`github.com/kutis96/cleancuts`**.
 
 See [AGENTS.md](AGENTS.md) for how to work in this codebase, and
 [docs/roadmap.md](docs/roadmap.md) for where we're headed.

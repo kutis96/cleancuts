@@ -47,15 +47,23 @@ type PostProcessor struct {
 
 // Machine is a full machine + post-processor description.
 type Machine struct {
-	ID            string        `json:"id"`
-	Name          string        `json:"name"`
-	Dialect       Dialect       `json:"dialect"`
-	Units         string        `json:"units"` // "mm" or "inch"
-	Axes          []Axis        `json:"axes"`
-	SpindleMaxRPM float64       `json:"spindle_max_rpm"`
-	WCS           string        `json:"wcs"`         // e.g. "G54"
-	SafeHeight    float64       `json:"safe_height"` // mm
-	ToolChange    string        `json:"tool_change"` // e.g. "T"
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	Dialect       Dialect `json:"dialect"`
+	Units         string  `json:"units"` // "mm" or "inch"
+	Axes          []Axis  `json:"axes"`
+	SpindleMaxRPM float64 `json:"spindle_max_rpm"`
+	WCS           string  `json:"wcs"`         // e.g. "G54"
+	SafeHeight    float64 `json:"safe_height"` // mm
+	ToolChange    string  `json:"tool_change"` // e.g. "T"
+	// Feed and rapid limits (per units, e.g. mm/min). These are the bounds the
+	// feed/rapid scheduler enforces (ADR-010): cutting moves clamp to
+	// [min_feed, max_feed], rapid moves to [min_rapid, max_rapid]. A value of 0
+	// means "no limit/minimum" in that direction.
+	MaxFeed       float64       `json:"max_feed"`
+	MinFeed       float64       `json:"min_feed"`
+	MaxRapid      float64       `json:"max_rapid"`
+	MinRapid      float64       `json:"min_rapid"`
 	PostProcessor PostProcessor `json:"post_processor"`
 }
 
@@ -80,6 +88,15 @@ func (m Machine) Validate() error {
 	}
 	if m.SpindleMaxRPM < 0 {
 		return fmt.Errorf("machine %q: spindle_max_rpm must be >= 0 (got %g)", m.ID, m.SpindleMaxRPM)
+	}
+	if m.MinFeed < 0 || m.MaxFeed < 0 || m.MinRapid < 0 || m.MaxRapid < 0 {
+		return fmt.Errorf("machine %q: feed and rapid limits must be >= 0", m.ID)
+	}
+	if m.MaxFeed > 0 && m.MinFeed > m.MaxFeed {
+		return fmt.Errorf("machine %q: min_feed (%g) must be <= max_feed (%g)", m.ID, m.MinFeed, m.MaxFeed)
+	}
+	if m.MaxRapid > 0 && m.MinRapid > m.MaxRapid {
+		return fmt.Errorf("machine %q: min_rapid (%g) must be <= max_rapid (%g)", m.ID, m.MinRapid, m.MaxRapid)
 	}
 	if m.PostProcessor.ArcFormat != "ij" && m.PostProcessor.ArcFormat != "absolute" {
 		return fmt.Errorf("machine %q: post_processor.arc_format must be \"ij\" or \"absolute\" (got %q)",

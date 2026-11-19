@@ -40,6 +40,10 @@
     "wcs": { "type": "string", "description": "Work coordinate word, e.g. 'G54'." },
     "safe_height": { "type": "number", "description": "Default rapid safe height (mm or in)." },
     "tool_change": { "type": "string", "description": "Tool word, e.g. 'T'." },
+    "max_feed": { "type": "number", "minimum": 0, "description": "Max cutting feed (per units). 0 = no limit. Cutting moves clamp to [min_feed, max_feed] (ADR-010)." },
+    "min_feed": { "type": "number", "minimum": 0, "description": "Min cutting feed (per units). 0 = no minimum." },
+    "max_rapid": { "type": "number", "minimum": 0, "description": "Max rapid feed (per units). 0 = no limit. Rapid moves clamp to [min_rapid, max_rapid] (ADR-010)." },
+    "min_rapid": { "type": "number", "minimum": 0, "description": "Min rapid feed (per units). 0 = no minimum." },
     "post_processor": {
       "type": "object",
       "additionalProperties": false,

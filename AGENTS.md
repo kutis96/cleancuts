@@ -26,6 +26,44 @@ code.
    generators validate their output before returning (ADR-006, ADR-007).
 6. **Config is data.** Tools and machines are JSON with stable lowercase snake_case
    keys. Adding a machine or a tool is a data change, not a code change (ADR-007).
+7. **Never over-cut.** Motion smoothing and any geometric change to the tool-centre
+   path must preserve clearance to the kept material — the safe failure is leaving
+   a small residual, never taking material that should stay. Cutting moves respect
+   `[min_feed, max_feed]`, rapids `[min_rapid, max_rapid]` (ADR-010).
+
+## Design first (the working mode)
+
+We optimise for **continuity under context loss**, not for speed of the first
+version. For each slice:
+
+1. **Specify the model** in `docs/` — the math, the config, the invariants. If it
+   changes or adds a decision, write the **ADR** first.
+2. **Then implement** to that spec, with tests that pin it.
+3. **Keep the docs and ADRs as the source of truth**, so a compaction or a new
+   agent loses the *work-in-progress*, not the *decisions*.
+
+A design decision is "done" when it is in an ADR + the relevant doc, even before
+the code exists. Implementation follows and is verified by tests.
+
+## Version control (git) — commit as you go
+
+This is a git repository (`github.com/kutis96/cleancuts`). Treat commits as
+**handoff checkpoints**:
+
+- **Commit small, focused slices.** One logical change per commit; don't bundle
+  unrelated edits.
+- **Commit as you go**, at each green checkpoint — not one big commit at the end.
+  A working, committed state is the safety net against context loss.
+- **Never commit a broken state.** Before committing, run the four commands below
+  and ensure they pass. If the build or a test is red, don't commit (or commit to a
+  scratch branch, never `main`).
+- **Conventional-ish messages:** a short imperative summary line, then a body that
+  says *what and why* and which ADR/invariant it upholds. Example:
+  `Point module at github.com/kutis96/cleancuts`.
+- **Branch for risky work** under the `bionic/` prefix; keep `main` green and
+  always shippable.
+- Do **not** revert others' changes or use destructive commands (`git reset --hard`,
+  `git checkout --`) unless explicitly asked.
 
 ## Build / test / verify (always run all three)
 

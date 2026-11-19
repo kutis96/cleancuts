@@ -50,6 +50,26 @@ each feeds the pipeline.
   uniform tool crib, but the planner will route drilling to its own operation
   later.
 
+### The tool as a tip envelope (3D-ready, ADR-011)
+
+The geometry fields are not just a list of numbers; together they define the
+**tip envelope** — the surface of revolution that *is* the cutting edge, described
+by the radius as a function of height above the tip, `r(z)`:
+
+| Tip (from fields) | `r(z)` |
+|---|---|
+| flat end mill (`corner_radius = 0`) | `D/2` over the cutting length, else `0` |
+| ball-nose (`corner_radius = D/2`) | spherical cap of radius `D/2`, then a cylinder |
+| bull-nose (`0 < corner_radius < D/2`) | a corner-radius cap, then a cylinder |
+| tapered (`taper_angle > 0`) | a cone, `r(z) = r_tip + z·tan θ` |
+
+This is the single abstraction that **2D offset** (use `r` at the working Z),
+**3D compensation** (offset the *surface*, not a point), **scallop height** (use
+the tip curvature), and **engagement/chip-load** (the engaged arc length depends
+on the shape) all consume. The current model already encodes it — the
+`tipRadius(z)` helper is a pure, testable addition, not a schema change. See
+[surface-quality.md](surface-quality.md) for how this drives 3D finish quality.
+
 ### Process parameters
 
 | Field | Type | Meaning | Drives |

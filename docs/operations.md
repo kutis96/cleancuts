@@ -85,28 +85,55 @@ has its own tests.
 
 > "smooth paths without too much acceleration/jerk."
 
+**The paramount constraint is safety, not smoothness** (ADR-010). Smoothing must
+never drive the cutter into material that is meant to be kept — that would destroy
+the part or the tool, and it is unrecoverable. Smoothness is a goal *within* the
+set of safe motions, never a reason to leave it.
+
 Smoothness is a **post-processing** concern, not a generation one, and it is
 separated deliberately:
 
+0. **Clearance is preserved first.** Any geometric smoothing (fillets, arc
+   insertion, re-shaping) is applied to the *tool-centre path* and **only in the
+   direction that increases or holds** the minimum clearance between the tool's
+   cutting *envelope* (not just its centre) and the kept material. The safe
+   failure mode is leaving a small residual that finishing removes — **never**
+   over-cutting. So at a corner we round the way that *leaves* material, not the
+   way that *takes* it.
 1. **Analytic arcs where they exist** (G2/G3). A trochoidal path is *already*
    mostly arcs, which are smooth by construction. Prefer emitting them as arcs
    over tessellating them (ADR-002).
-2. **Corner handling:** at joins between segments, insert a fillet (an arc) of a
-   configurable radius rather than a sharp mitre, or emit a short deceleration.
-   This removes the velocity discontinuity that causes jerk.
-3. **Lookahead feed scheduling (phase 4):** a small planner walks the move list
-   and computes a feed schedule that respects the machine's acceleration and jerk
-   limits, decelerating into corners and re-accelerating out. Inputs are the
-   machine config (max feed/accels) and the move geometry. Output is a per-move
-   `feed` (and, if the dialect supports it, feed-override words).
-4. **G1 fallback:** for controllers without reliable G2/G3, the same moves are
+2. **Corner handling (clearance-safe):** at a join, prefer a **deceleration**
+   over a geometric fillet. Where a fillet is used it must satisfy rule 0. This
+   removes the velocity discontinuity that causes jerk without risking the part.
+3. **Lookahead feed scheduling (phase 4):** a planner walks the move list and
+   computes a feed schedule that respects the machine's **feed and rapid limits
+   and** acceleration/jerk limits, decelerating into corners and re-accelerating
+   out. It **decelerates into corners; it does not re-route** them (re-routing is
+   where over-cutting risk lives, and rule 0 governs any geometric change).
+4. **Feed and rapid limits (ADR-010):** cutting moves clamp to
+   `[min_feed, max_feed]`, rapids to `[min_rapid, max_rapid]`, per-axis motion to
+   the axis `max_feed`/`max_rapid`. These come from the machine config
+   (see [gcode.md](gcode.md)). A rapid is never a slow creep; a cut never exceeds
+   max feed.
+5. **G1 fallback:** for controllers without reliable G2/G3, the same moves are
    tessellated at a configurable angular tolerance (`gcode.Options.ArcTolDeg`),
-   and the fillet/lookahead rules still apply to the resulting segments.
+   and rules 0, 2, and 3 still apply to the resulting segments.
 
 **Principle:** the *shape* is analytic and owned by generation; the *velocity
-profile* is owned by post-processing. Neither reaches into the other.
+profile* is owned by post-processing; and **correctness (clearance) dominates
+smoothness** throughout. Neither the shape nor the velocity profile ever reaches
+into the other's domain.
 
 ## Climb vs. conventional: how the choice is made
+
+> **Where the decision lives (ADR-009).** This is decided in **planning, before
+> generation**, because the choice sets the *traversal direction* the tool must
+> take — an input to generation, not a label on the output. The planner picks the
+> mode (climb/conventional) per feature and fixes the contour orientation that
+> achieves it; generation then emits the moves in that orientation and records the
+> mode on each cutting move (ADR-005). The derivation below is what the planner
+> uses to choose the orientation.
 
 The milling mode of a cutting move is determined by three things (ADR-005):
 

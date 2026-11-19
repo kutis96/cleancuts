@@ -11,23 +11,25 @@ Every stage has a narrow input/output contract and communicates through the
 shared value types in `internal/kernel` and `internal/moves`.
 
 ```
-   input                 plan                    generate                 exchange             emit
-┌────────┐   features  ┌──────────────┐   moves ┌───────────────────┐   ┌──────────────────┐
-│ part   │ ──────────► │ operation    │ ──────► │ toolpath          │──►│ post-processor   │──► G-code
-│ stock  │             │ planner      │         │ generators        │   │ (generic / mach) │
-│ tool   │             └──────────────┘         └───────────────────┘   └──────────────────┘
-└────────┘                     ▲                          ▲                    ▲
-                               │                          │                    │
-                          ┌─────────┐              ┌──────────────┐     ┌─────────────┐
-                          │  tool   │              │ cutter comp  │     │  machine    │
-                          │ machine │              │ (phase 2)    │     │  config     │
-                          │  config │              └──────────────┘     └─────────────┘
-                          └─────────┘
+   config (tool / machine JSON)
+        │                          ▲                        ▲
+        ▼                          │                        │
+ part ─► features ─► PLANNING ─► GENERATION ─► MOVES ─► POST-PROCESS ─► G-code
+ stock           (operation,      (emits      (format)   (generic +
+ tool            strategy,         moves       │          machine-
+                       mode,       in the      │          specific)
+                       direction,  planned)
+                       pass list)
+                          ▲                        │
+                          │                        │
+                    (cutter compensation composes here, phase 2)
 ```
 
-Read it as data flowing left to right; the three boxes at the bottom are the
-*configuration* each stage reads. Nothing in the pipeline carries mutable
-global state.
+Read it as data flowing left to right. The tool and machine JSON config feeds the
+planner (which picks operation, strategy, milling mode, direction, and passes) and
+the post-processor (which applies the dialect). Cutter compensation composes in
+front of generation (phase 2). Nothing in the pipeline carries mutable global
+state.
 
 ### Stage 1 — Geometry & features
 
@@ -40,6 +42,26 @@ global state.
   imported part/stock geometry. In v0.1 the "feature" is implicit (the caller
   supplies the contour), so this stage is not yet a separate package. See the
   roadmap for when it becomes one.
+
+### Stage 1.5 — Planning (operation, strategy, milling mode, direction, passes)
+
+The **planner** runs *before* generation and makes the per-feature decisions that
+generation then executes (ADR-009):
+
+- **Operation & strategy:** which feature gets which strategy (profile, pocket,
+  face, adaptive/trochoidal, 3D finishing).
+- **Milling mode:** climb or conventional per feature (default + overrides), and
+  — crucially — the **traversal direction / contour orientation** that achieves
+  it. This is decided *here*, because it is an input to generation, not a label on
+  the output (ADR-005, ADR-009).
+- **Pass structure:** rough → (semi-finish) → finish, depth-of-cut per pass,
+  finishing allowance, and the per-region strategy for 3D (see
+  [surface-quality.md](surface-quality.md)).
+- **Feed/speed intent:** resolve the tool's `feeds[]` + `max_rpm` into target
+  spindle/feed, to be clamped by the machine limits (ADR-010).
+
+In v0.1 the caller supplies these (the profile command's params *are* a minimal
+plan); the dedicated planner package lands in phase 2.
 
 ### Stage 2 — Toolpath generation
 
@@ -171,6 +193,31 @@ Adding a new machine post-processor:
   equal + `Validate()` passes).
 - **Property-style checks** where a relation must hold (e.g. a closed profile's
   cutting length equals the contour perimeter).
+
+## Design-for-3D (ADR-011)
+
+The immediate target is 2.5D, but the spine is shaped so 3D is *addition*, not
+*re-architecture*:
+
+- **Same pipeline.** geometry → features → planning → generation → moves →
+  post-processing. 2.5D is the degenerate case (Z constant) of 3D, so building it
+  now exercises the exact path 3D will use.
+- **3D-ready format.** `Move` already carries 3D points; an arc is defined by
+  centre + start + end + direction for any plane, so no new arc type is needed.
+  The only 2.5D assumption is in the *helpers* (the emitter's arc-angle math and
+  `Path.Length`), which assume the XY plane — generalising them means computing
+  the arc plane from the three points and, for 3D arcs, storing an explicit plane
+  normal so CW/CCW is unambiguous. That is an extension, not a break.
+- **Tool as a tip envelope.** Every tip family (flat / ball / bull / taper) is a
+  surface of revolution described by `r(z)`. The current `Tool` fields already
+  encode it; the `tipRadius(z)` helper is a pure, testable addition. 2D offset
+  uses `r` at fixed Z; 3D offsets the surface.
+- **3D adds modules, not a new spine:** surface offset / tool placement, volume
+  collision, and adaptive (curvature-driven) stepover — each a separate,
+  heavily-tested package.
+
+See [surface-quality.md](surface-quality.md) for the surface-finish model and
+[operations.md](operations.md) for the 3D strategy list.
 
 ## What is deliberately NOT in the core (yet)
 

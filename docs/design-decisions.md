@@ -277,3 +277,142 @@ geometry ─► features ─► toolpath generation ─► [cutter compensation]
   that stage's error type.
 
 **Related.** ADR-003, ADR-004.
+
+---
+
+## ADR-009 — Climb/conventional is decided in planning, before generation (Accepted)
+
+**Context.** ADR-005 established that the milling mode is explicit data on each
+cutting move. It left *where the decision is made* underspecified. In practice
+the choice is not a label you tack on after the fact: **climb vs. conventional
+determines the direction the tool must travel** along a contour, given the cutter
+rotation and which side holds the material. The direction is a fundamental input
+to toolpath generation. Deciding it after generation (or trying to flip it by
+reversing a finished path) is fragile and error-prone.
+
+**Decision.** The pipeline gains an explicit **planning** stage that runs *before*
+generation and is responsible for:
+
+- selecting the operation and strategy per feature,
+- **choosing the milling mode** (climb/conventional) per feature, applying the
+  global default and any per-operation / per-path override, and
+- **fixing the contour orientation / traversal direction** that achieves the
+  chosen mode (rotation + travel direction + material side, per ADR-005).
+
+Generation then produces the `moves.Path` *in that orientation* and records the
+resulting mode on each cutting move (as data, per ADR-005). In short:
+
+```
+features ─► PLANNING (operation, strategy, milling mode, traversal direction, passes)
+        ─► GENERATION (emits moves in the planned orientation, mode recorded)
+        ─► moves
+```
+
+**Consequences.**
+
+- "Use the correct milling on the correct surface" is a *planning* decision with
+  a single, testable policy (see [operations.md](operations.md)), not a
+  post-hoc relabel.
+- The traversal direction is decided once, up front, and is a visible input to
+  generation — overridable in the intermediate format (flip the orientation and
+  regenerate, or edit the resulting path).
+- ADR-005 stands (the mode is still explicit data on the move); ADR-009 fixes
+  where the decision lives.
+
+**Related.** ADR-005, ADR-008.
+
+---
+
+## ADR-010 — Motion smoothing is clearance-preserving; feed and rapid limits are respected (Accepted)
+
+**Context.** Smooth, low-jerk motion is a goal, but the *paramount* constraint is
+never cutting into material that is designated to be kept. Naive corner
+filleting or lookahead deceleration can round a tool-centre path the wrong way
+and drive the cutter across the part — destroying the part or the tool. Smoothness
+must be subordinate to correctness. Separately, both cutting (G1) and non-cutting
+(G0) moves must respect the machine's feed/rapid limits.
+
+**Decision.**
+
+1. **Clearance is preserved.** Any smoothing (fillets, arc insertion, lookahead
+   re-shaping) is applied to the *tool-centre path*, and only in the direction
+   that **increases or holds** the minimum distance between the tool's cutting
+   envelope and the kept material. The safe failure mode is leaving a small
+   amount of extra stock (a residual scallop that finishing removes), **never**
+   removing material that should stay. Over-cutting is unrecoverable;
+   under-cutting is recoverable, so we always bias to the latter.
+2. **The tool envelope, not a point, is what is kept clear.** Clearance checks use
+   the actual tool tip surface (see ADR-011), not just the centre, so a ball-nose
+   or bull-nose is respected, not only its radius.
+3. **Feed and rapid limits are enforced.** Cutting moves are clamped to
+   `[min_feed, max_feed]`; rapid moves to `[min_rapid, max_rapid]`; per-axis
+   motion is bounded by the axis `max_feed`/`max_rapid`. These limits live in the
+   machine config and are applied by the feed/rapid scheduler (see
+   [gcode.md](gcode.md)). A rapid is never silently turned into a slow creep, and
+   a cutting move is never allowed to exceed the machine's max feed.
+4. **Lookahead decelerates, it does not re-route, into corners** for the v1 model:
+   it lowers feed into a join and recovers out, rather than geometrically
+   re-shaping the path (which is where over-cutting risk lives). Geometric
+   fillets, where used, follow rule 1.
+
+**Consequences.**
+
+- Correctness dominates smoothness, by construction: the optimisation domain for
+  smoothing is the clearance-safe region only.
+- Feed/rapid clamping is a well-defined, testable contract (given a machine
+  config and a move, the clamped value is a pure function).
+- "Smooth but safe" is a stated invariant, not an aspiration.
+
+**Related.** ADR-002 (analytic arcs), ADR-006 (precision), ADR-011 (tool envelope).
+
+---
+
+## ADR-011 — The core is designed 3D-capable from the start; the tool is a tip envelope (Accepted)
+
+**Context.** The immediate goal is 2.5D, but the friend's work and the long-term
+value are in 3D milling of organic shapes with varied end mills (flat, ball-nose,
+bull-nose, tapered) and flute counts. We want to build 2.5D now *without*
+architecting a wall we must later tear down. The user is not a machinist and wants
+the software to expose the *right knobs* for surface quality (passes, fineness)
+rather than guess.
+
+**Decision.**
+
+1. **The spine is 3D-ready.** The pipeline (geometry → features → planning →
+   generation → moves → post-processing) is the same for 2.5D and 3D. 3D adds
+   *modules* (surface offset, collision, adaptive stepover), it does not change
+   the spine. 2.5D is the degenerate case (Z constant) of 3D, so building 2.5D
+   on the 3D shape is free.
+2. **The tool is modelled as a tip envelope** — a surface of revolution about the
+   spindle axis, described by a radius-as-a-function-of-height `r(z)`. Every
+   tip family is a case of this one abstraction:
+   - flat end mill: `r(z) = D/2` over the cutting length, else 0;
+   - ball-nose: a spherical cap of radius `D/2` + a cylinder;
+   - bull-nose: a corner-radius cap + a cylinder;
+   - tapered: a cone (`r(z) = r_tip + z·tanθ`).
+   The current `Tool` fields (`kind`, `diameter`, `corner_radius`, `taper_angle`)
+   already *encode* this envelope; the `tipRadius(z)` helper is a pure, testable
+   addition. 2D offset uses `r` at a fixed Z; 3D compensation offsets the surface.
+3. **The moves format is 3D-ready.** `Move` already carries 3D points. An arc is
+   fully defined by centre + start + end + direction for *any* plane, so the
+   format needs no new arc type for 3D. The only 2.5D assumption that exists is
+   in the *helpers* (the generic emitter's arc angle math and `Path.Length`),
+   which assume the XY plane; generalising them means computing the arc plane from
+   the three points. For 3D arcs we will add an explicit plane normal (or a
+   stated convention) so CW/CCW is unambiguous — this is a format *extension*, not
+   a break.
+4. **Surface quality is configuration, not a constant.** The planner exposes the
+   machinist's knobs — target scallop height (or stepover), depth-of-cut per pass,
+   number of passes, finishing allowance, per-region strategy, steep-angle
+   threshold, surface tolerance — rather than hard-coding "how fine" (see
+   [surface-quality.md](surface-quality.md)).
+
+**Consequences.**
+
+- 2.5D work is not throwaway; it exercises the same spine, format, and tool model
+   that 3D will use.
+- "How fine should it go" becomes a defined, testable relationship (e.g. scallop
+  height ↔ stepover) instead of a fudge factor.
+- Adding 3D is "new modules + a plane field on arcs," not a re-architecture.
+
+**Related.** ADR-001 (canonical frame), ADR-002 (analytic curves), ADR-003 (format).

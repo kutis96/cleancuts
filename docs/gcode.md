@@ -122,6 +122,26 @@ varies *only* the dialect and framing, never the geometry:
 coordinates beyond the single, config-driven axis/units mapping. This is what
 keeps coordinate bugs (ADR-001, ADR-006) out of the core.
 
+### 3. Feed & rapid limits (ADR-010)
+
+Post-processing enforces the machine's feed and rapid bounds so that neither
+cutting nor rapid motion overruns the machine:
+
+- **Cutting moves (G1)** clamp to `[min_feed, max_feed]`.
+- **Rapid moves (G0)** clamp to `[min_rapid, max_rapid]`.
+- **Per-axis motion** is bounded by the axis `max_feed` / `max_rapid` (the
+  machine config carries per-axis `max_feed`/`max_rapid` plus the machine-level
+  `min/max_feed` and `min/max_rapid`).
+- A limit of `0` means "no limit/minimum" in that direction; a non-zero `min`
+  prevents a cutting move from becoming a stall-prone creep or a rapid from
+  becoming an unintended slow move.
+
+Clamping is a **pure function** of (machine config, move) and is independently
+testable. It runs after the feed is resolved (from the tool's `feeds[]` and any
+constant-chip-load scaling) and before emission, so the emitted `F` is always
+within the machine's envelope. The lookahead scheduler (phase 4) layers
+acceleration/jerk limits on top of these bounds, never replacing them.
+
 ### Arc format note
 
 - **`ij` (relative offsets):** `G3 X… Y… I… J…`, where `I`/`J` are the centre

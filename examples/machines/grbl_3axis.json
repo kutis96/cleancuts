@@ -12,6 +12,10 @@
   "wcs": "G54",
   "safe_height": 5,
   "tool_change": "T",
+  "max_feed": 8000,
+  "min_feed": 100,
+  "max_rapid": 8000,
+  "min_rapid": 0,
   "post_processor": {
     "spindle_start": 3,
     "spindle_stop": 5,

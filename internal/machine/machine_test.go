@@ -43,6 +43,23 @@ func TestMachineValidate(t *testing.T) {
 	if err := m.Validate(); err == nil {
 		t.Error("expected arc_format error")
 	}
+
+	// Feed/rapid limit invariants (ADR-010).
+	m = validMachine()
+	m.MinFeed, m.MaxFeed = 9000, 8000
+	if err := m.Validate(); err == nil {
+		t.Error("expected min_feed > max_feed error")
+	}
+	m = validMachine()
+	m.MinRapid, m.MaxRapid = 9000, 8000
+	if err := m.Validate(); err == nil {
+		t.Error("expected min_rapid > max_rapid error")
+	}
+	m = validMachine()
+	m.MaxFeed, m.MinFeed, m.MaxRapid, m.MinRapid = 8000, 100, 8000, 0
+	if err := m.Validate(); err != nil {
+		t.Errorf("valid feed/rapid limits should pass, got %v", err)
+	}
 }
 
 func TestMachineJSONRoundTrip(t *testing.T) {
