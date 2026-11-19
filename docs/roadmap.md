@@ -50,10 +50,12 @@ Goal: machine a real part's 2D features correctly.
       later phase and treat mesh as the v1 input.
 - [ ] **Stock:** box + common solids (cylinder, prism) as the material block;
       stock-vs-part boolean to find what to remove.
-- [ ] **Cutter compensation:** robust 2D offset (inside/outside), with mitre and
-      fillet corner joins. This is the highest-risk, highest-value piece — it gets
-      its own heavily-tested module (a new ADR if it introduces a robust-geometry
-      layer).
+- [ ] **Cutter compensation** (ADR-013; [cutter-compensation.md](cutter-compensation.md)):
+      a dedicated, composable `comp` module — outside/inside offset, mitre/chamfer/
+      fillet joins, and a **safe-by-construction** guarantee (self-intersection is
+      trimmed, *never* over-cut; unreachable features are reported). Built in the
+      documented, test-per-step order (per-edge offset → joins → assemble+trim →
+      diagnostics → compose with profile/pocket).
 - [ ] **Climb/conventional:** the planner chooses the milling mode per contour
       (rotation + travel + material side) **before generation** and fixes the
       traversal direction that achieves it (ADR-009); global / per-operation /

@@ -464,3 +464,59 @@ downstream stage respect them.
 
 **Related.** ADR-001 (canonical frame), ADR-010 (never over-cut), ADR-011 (tool
 envelope), ADR-007 (config as data).
+
+---
+
+## ADR-013 — 2D offset / cutter compensation is a dedicated, composable, safe-by-construction module (Accepted)
+
+**Context.** Cutter compensation — offsetting a contour by the tool radius to get
+the tool-centre path — is the highest-risk, highest-value piece of 2D CAM, and the
+place where most CAM 2D bugs live: self-intersecting offsets, degenerate corners,
+and (worst) offsets that over-cut the part. It must be isolated, heavily tested,
+and *composable* so that "profile with compensation" and "profile without
+compensation" are the same generator with different inputs, and so the safe
+behaviour is guaranteed by the module, not by every caller.
+
+**Decision.**
+
+1. **A dedicated `comp` module** composes *in front of* the toolpath generators
+   (ADR-008). Contract: `(contour, tool radius r, offset direction, join policy)
+   → (new contour, diagnostics)`. It is pure geometry on `kernel` types (lines,
+   arcs); it does **not** emit moves. The generator consumes the offset contour.
+2. **The tool-centre path is the boundary offset by the tool radius `r`.** `r` is
+   the tool's tip-envelope radius **at the working Z** (ADR-011): `D/2` for a flat
+   end mill, the corner-radius cap for a bull-nose, the spherical cap for a
+   ball-nose (in 2D, at a fixed Z this is just a number).
+3. **Offset direction** is *outside* (tool-centre path outside the kept boundary
+   → **profiling**) or *inside* (tool-centre path inside the boundary → **pocket
+   walls**). This is the single most common 2D mistake, so it is an explicit, named
+   input — not inferred.
+4. **Corner joins:** a sharp boundary corner yields a **mitre** in the centre path
+   (the tool is a circle, tangent to both offset edges, leaving a small **cusp** in
+   the cut — the standard, correct result). A **mitre limit** caps how far the mitre
+   point may extend; beyond it the join becomes a **chamfer**. A **fillet** (an arc
+   of radius `r`) is used where the boundary corner is rounded or a rounded centre
+   path is desired. Join type is per-operation config with a sensible default.
+5. **Safe-by-construction (the core guarantee):** any offset that would
+   **self-intersect** or **over-cut** is resolved by **trimming to the
+   tool-reachable region — always leaving material, never taking it** (ADR-010).
+   A feature the tool cannot reach (too large for the notch/corner) is **reported**
+   in the diagnostics ("feature unreachable at this tool radius"), not silently
+   over-cut. The module's failure mode is *under-cut* (a residual a smaller tool /
+   finish pass removes), never *over-cut*.
+6. **Analytic, tested:** offsets of known shapes (offset a square, offset a
+   circle, offset a tight notch) have exact analytic results and are asserted to
+   tight tolerance. Degenerate cases (collinear edges, zero-length features,
+   tool-radius-larger-than-feature) have explicit tests and the safe resolution.
+
+**Consequences.**
+
+- The hardest 2D geometry is one isolated, heavily-tested module with a defined
+  safe-failure mode, not a risk smeared across every generator.
+- Generators stay simple: they take a contour (already compensated or not) and
+  emit moves.
+- "Don't over-cut at the corner" is a property of the `comp` module, verified by
+  test, independent of which operation uses it.
+
+**Related.** ADR-002 (analytic curves), ADR-006 (robustness), ADR-010 (never
+over-cut), ADR-011 (tip envelope), ADR-008 (composable stages).

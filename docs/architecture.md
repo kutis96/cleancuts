@@ -71,7 +71,9 @@ plan); the dedicated planner package lands in phase 2.
   module producing `moves.Path`.
 - **Cutter compensation** (offsetting a contour by the tool radius, with correct
   inside/outside semantics and corner joins) is deliberately a *separate* module
-  that composes in front of the generators. Keeping it separate means "profile
+  (`comp`) that composes in front of the generators — specified in
+  [cutter-compensation.md](cutter-compensation.md) and guaranteed safe-by-
+  construction (never over-cuts; ADR-013). Keeping it separate means "profile
   with offset" and "profile without offset" are the same generator with different
   inputs.
 
