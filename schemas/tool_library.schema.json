@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/spacecat/cleancuts/schemas/tool_library.schema.json",
+  "title": "CleanCuts tool library",
+  "description": "A portable tool crib: a named set of tools with unique IDs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "tools"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string" },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "tool.schema.json" }
+    }
+  }
+}

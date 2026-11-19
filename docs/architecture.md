@@ -1,0 +1,184 @@
+# Architecture
+
+This document describes how CleanCuts is structured, how data flows through it,
+and how to extend it. The *why* lives in [design-decisions.md](design-decisions.md);
+this is the *what* and *how*.
+
+## The pipeline
+
+CleanCuts is a pipeline of **composable, independently testable stages** (ADR-008).
+Every stage has a narrow input/output contract and communicates through the
+shared value types in `internal/kernel` and `internal/moves`.
+
+```
+   input                 plan                    generate                 exchange             emit
+┌────────┐   features  ┌──────────────┐   moves ┌───────────────────┐   ┌──────────────────┐
+│ part   │ ──────────► │ operation    │ ──────► │ toolpath          │──►│ post-processor   │──► G-code
+│ stock  │             │ planner      │         │ generators        │   │ (generic / mach) │
+│ tool   │             └──────────────┘         └───────────────────┘   └──────────────────┘
+└────────┘                     ▲                          ▲                    ▲
+                               │                          │                    │
+                          ┌─────────┐              ┌──────────────┐     ┌─────────────┐
+                          │  tool   │              │ cutter comp  │     │  machine    │
+                          │ machine │              │ (phase 2)    │     │  config     │
+                          │  config │              └──────────────┘     └─────────────┘
+                          └─────────┘
+```
+
+Read it as data flowing left to right; the three boxes at the bottom are the
+*configuration* each stage reads. Nothing in the pipeline carries mutable
+global state.
+
+### Stage 1 — Geometry & features
+
+- **`internal/kernel`** is the dependency-free geometry and math core. It defines
+  `Vec2/Point2`, `Vec3/Point3`, `Line2`, `Arc2`, intersection predicates, and the
+  tolerance model (`kernel.AbsTol`). It has **no dependencies** and **no
+  knowledge of CAM** — it is a pure, tested geometry library.
+- **Feature planning** (detecting pockets, profiles, faces; deciding which
+  operation applies where) is a stage that will sit on top of the kernel plus the
+  imported part/stock geometry. In v0.1 the "feature" is implicit (the caller
+  supplies the contour), so this stage is not yet a separate package. See the
+  roadmap for when it becomes one.
+
+### Stage 2 — Toolpath generation
+
+- **`internal/toolpath`** turns geometry into `moves.Path`. v0.1 ships `Profile`
+  (a closed 2D contour → plunge, cutting loop, retract). Later phases add pocket,
+  facing, adaptive/trochoidal, and 3D strategies, each as its own function or
+  module producing `moves.Path`.
+- **Cutter compensation** (offsetting a contour by the tool radius, with correct
+  inside/outside semantics and corner joins) is deliberately a *separate* module
+  that composes in front of the generators. Keeping it separate means "profile
+  with offset" and "profile without offset" are the same generator with different
+  inputs.
+
+### Stage 3 — The interchange format
+
+- **`internal/moves`** is the machine-independent toolpath format (ADR-003):
+  `Move` (rapid / linear / arc, with feed, spindle, coolant, milling mode) and
+  `Path` (one continuous chain). It enforces its own invariants (`Validate`) and
+  serialises to stable JSON. This is the **seam** between "what to cut" and "how
+  to tell a machine to cut it."
+
+### Stage 4 — Post-processing & emission
+
+- **`internal/gcode`** is the generic, dialect-neutral G-code emitter (G0/G1/G2/G3
+  + S/M codes), with optional arc tessellation for controllers without reliable
+  G2/G3.
+- **Machine-specific** post-processors (GRBL, LinuxCNC, Fanuc, …) will read the
+  **`internal/machine`** config and vary only the dialect/framing — never the
+  geometry. They compose over the generic emitter rather than replacing it.
+
+### Configuration
+
+- **`internal/tool`** — portable tool model + library (JSON). See
+  [tool-parameters.md](tool-parameters.md).
+- **`internal/machine`** — portable machine + post-processor config (JSON). See
+  [gcode.md](gcode.md).
+
+## Data flow, concretely
+
+A v0.1 program does the following, and each step is independently testable:
+
+1. The caller defines a part contour (`[]kernel.Point2`) and a `toolpath.ProfileParams`.
+2. `toolpath.Profile` builds a `moves.Path`: one rapid plunge, one linear move
+   per edge (all at `CutZ`), one rapid retract. It validates the result before
+   returning.
+3. `gcode.Emit` reads the `moves.Path`, validates it again (defence in depth), and
+   renders G-code: spindle/coolant setup, the moves (G2/G3 arcs or tessellated G1),
+   and program-end codes.
+
+The same `moves.Path` could instead be:
+- serialised to JSON and inspected/edited by a user, or
+- fed to a machine-specific post-processor, or
+- rendered by the (future) GUI.
+
+That single fact — *one format, many consumers* — is the architectural centrepiece.
+
+## Package contracts
+
+Each package exposes a small, deliberate public surface. The rule: **a package
+depends only on `kernel` and, at most, the formats it produces/consumes.** There
+are no cycles and no "god packages."
+
+```
+        ┌─────────────────────────────┐
+        │          kernel             │   (no internal deps)
+        └─────────────────────────────┘
+              ▲      ▲      ▲
+              │      │      │
+        ┌─────────┐ ┌────────┐ ┌────────────┐
+        │  moves  │ │ tool   │ │  machine   │   (depend on kernel only)
+        └─────────┘ └────────┘ └────────────┘
+              ▲
+              │
+        ┌──────────────────────────┐
+        │  toolpath                │   (produces moves)
+        └──────────────────────────┘
+              ▲
+              │
+        ┌──────────────────────────┐
+        │  gcode                   │   (consumes moves)
+        └──────────────────────────┘
+              ▲
+              │
+        ┌──────────────────────────┐
+        │  cmd/cleancuts           │   (CLI)
+        └──────────────────────────┘
+```
+
+## Error-handling contract
+
+- Errors are **precise and non-misleading**: they name the package, the object,
+  and the offending value, e.g.
+  `tool "t1": corner radius 6 exceeds radius 5`.
+- Generators **validate their output** before returning, so an invalid state
+  fails at the point it is created, not deep in a consumer.
+- Consumers re-validate their inputs (defence in depth) so a bad value is caught
+  at the boundary of the package that would otherwise misbehave.
+- Errors wrap (`%w`) so the full chain is available when needed, but the message
+  a human reads is the outermost, most specific one.
+
+## How to add a feature
+
+Adding a new toolpath strategy (e.g. a 2D pocket):
+
+1. **Create** `internal/toolpath/pocket.go` (or a subpackage). It takes geometry
+   + params and returns `moves.Path` (+ `error`). It must call
+   `Path.Validate()` before returning.
+2. **Test** it table-driven: valid inputs → expected moves; invalid inputs →
+   precise errors; boundary cases (zero depth, single pass, etc.).
+3. **Document** it in [operations.md](operations.md) and add it to the roadmap.
+4. **Do not** change `kernel`, `moves`, or `gcode` to fit your feature. If you
+   find you need to, write an ADR first — that is a signal the abstraction
+   boundary is in the wrong place.
+
+Adding a new machine post-processor:
+
+1. Read the **`internal/machine`** config.
+2. Compose over `gcode.Emit` (vary dialect/framing from the config).
+3. Add an example machine JSON under `examples/machines/`.
+4. Add a round-trip + emission test.
+
+## Testing strategy
+
+- **Table-driven, self-documenting tests** in the same package (white-box where
+  it helps, black-box for public contracts).
+- **Analytic assertions** where possible (arc length, intersection points) to
+  tight tolerance, since we do not resample (ADR-002, ADR-006).
+- **Round-trip tests** for every JSON-serialised type (marshal → unmarshal →
+  equal + `Validate()` passes).
+- **Property-style checks** where a relation must hold (e.g. a closed profile's
+  cutting length equals the contour perimeter).
+
+## What is deliberately NOT in the core (yet)
+
+- Part import (STL/3MF/B-rep) — a boundary module that normalises into the
+  canonical frame (ADR-001) and hands geometry to the pipeline. Roadmap phase 2.
+- Full 2D offset / cutter compensation with robust corner joins. Phase 2.
+- Adaptive/trochoidal, constant-chip-load, and jerk-limited feed scheduling.
+  Phases 3–4 (see [operations.md](operations.md)).
+- The WASM GUI. A separate effort that consumes the `moves` format.
+
+These are all *additions to the pipeline*, not changes to its spine.

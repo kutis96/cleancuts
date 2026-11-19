@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/spacecat/cleancuts/schemas/tool.schema.json",
+  "title": "CleanCuts tool",
+  "description": "A single cutting tool. See docs/tool-parameters.md for the meaning of each field and the feed/speed model.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "diameter", "flutes", "max_rpm"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier, unique within a library."
+    },
+    "name": { "type": "string", "description": "Human-readable name." },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "flat_end_mill",
+        "ball_nose",
+        "bull_nose",
+        "taper_end_mill",
+        "chamfer",
+        "drill",
+        "face_mill"
+      ],
+      "description": "Tip family. Drives valid operations and tip geometry."
+    },
+    "diameter": { "type": "number", "exclusiveMinimum": 0, "description": "Cutting diameter (mm)." },
+    "flutes": { "type": "integer", "minimum": 0, "description": "Number of teeth." },
+    "corner_radius": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Bull-nose corner radius (mm). Must be <= diameter/2. 0 for a flat tip, diameter/2 for a ball nose."
+    },
+    "taper_angle": {
+      "type": "number",
+      "minimum": 0,
+      "exclusiveMaximum": 90,
+      "description": "Half-angle for tapered tools (deg). 0 for a straight tool."
+    },
+    "flute_length": { "type": "number", "minimum": 0, "description": "Cutting length (mm)." },
+    "overall_length": { "type": "number", "minimum": 0, "description": "Shank + flute (mm)." },
+    "shank_diameter": { "type": "number", "minimum": 0, "description": "Shank diameter (mm)." },
+    "material": { "type": "string", "description": "Tool material, e.g. 'carbide', 'hss'." },
+    "coating": { "type": "string", "description": "e.g. 'TiAlN', 'AlCrN', 'none'." },
+    "max_rpm": { "type": "number", "minimum": 0, "description": "Maximum safe spindle speed (rpm)." },
+    "feeds": {
+      "type": "array",
+      "description": "Recommended process parameters per workpiece material.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["material", "fz"],
+        "properties": {
+          "material": { "type": "string", "description": "Workpiece material key, e.g. 'aluminum-6061'." },
+          "fz": { "type": "number", "exclusiveMinimum": 0, "description": "Feed per tooth (mm/tooth)." },
+          "vc": { "type": "number", "minimum": 0, "description": "Cutting speed (m/min). 0 = use fz only." },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

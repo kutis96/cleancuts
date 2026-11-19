@@ -1,0 +1,19 @@
+# Go build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local scratch
+/tmp/

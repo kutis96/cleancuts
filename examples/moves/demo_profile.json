@@ -1,0 +1,16 @@
+{
+  "id": "profile-demo",
+  "name": "2D profile of a 100 x 60 mm rectangle",
+  "operation": "profile",
+  "tool_id": "endmill-10mm-4f",
+  "pass": 1,
+  "moves": [
+    { "kind": "rapid",  "from": {"x":0,"y":0,"z":5},    "to": {"x":0,"y":0,"z":-10},   "center": {"x":0,"y":0,"z":0},     "cw": false, "feed": 0,   "spindle": 8000, "coolant": "flood", "milling": "",          "comment": "plunge" },
+    { "kind": "linear", "from": {"x":0,"y":0,"z":-10},  "to": {"x":100,"y":0,"z":-10}, "center": {"x":0,"y":0,"z":0},     "cw": false, "feed": 600, "spindle": 8000, "coolant": "flood", "milling": "climb",     "comment": "" },
+    { "kind": "linear", "from": {"x":100,"y":0,"z":-10},"to": {"x":100,"y":60,"z":-10},"center": {"x":0,"y":0,"z":0},     "cw": false, "feed": 600, "spindle": 8000, "coolant": "flood", "milling": "climb",     "comment": "" },
+    { "kind": "linear", "from": {"x":100,"y":60,"z":-10},"to": {"x":0,"y":60,"z":-10}, "center": {"x":0,"y":0,"z":0},     "cw": false, "feed": 600, "spindle": 8000, "coolant": "flood", "milling": "climb",     "comment": "" },
+    { "kind": "linear", "from": {"x":0,"y":60,"z":-10}, "to": {"x":0,"y":0,"z":-10},   "center": {"x":0,"y":0,"z":0},     "cw": false, "feed": 600, "spindle": 8000, "coolant": "flood", "milling": "climb",     "comment": "" },
+    { "kind": "rapid",  "from": {"x":0,"y":0,"z":-10},  "to": {"x":0,"y":0,"z":5},     "center": {"x":0,"y":0,"z":0},     "cw": false, "feed": 0,   "spindle": 8000, "coolant": "flood", "milling": "",          "comment": "retract" }
+  ],
+  "metadata": { "strategy": "profile", "model": "v0.1", "note": "Contour used directly as the tool-centre path; cutter compensation is a phase-2 module." }
+}

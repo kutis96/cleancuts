@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/spacecat/cleancuts/schemas/moves.schema.json",
+  "title": "CleanCuts toolpath (moves)",
+  "description": "The machine-independent intermediate toolpath format. See docs/gcode.md. Coordinates are the canonical WCS: right-handed, Z-up, millimetres.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "moves"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "Stable path identifier." },
+    "name": { "type": "string" },
+    "operation": { "type": "string", "description": "e.g. 'profile', 'pocket', 'face'." },
+    "tool_id": { "type": "string", "description": "Which tool this path is for." },
+    "pass": { "type": "integer", "minimum": 1, "description": "Pass number within the operation." },
+    "moves": {
+      "type": "array",
+      "minItems": 1,
+      "description": "One continuous chain: each move.from == previous move.to.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "from", "to", "feed"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["rapid", "linear", "arc_ccw", "arc_cw"],
+            "description": "rapid=G0, linear=G1, arc_ccw=G3, arc_cw=G2."
+          },
+          "from": { "$ref": "#/definitions/point" },
+          "to": { "$ref": "#/definitions/point" },
+          "center": {
+            "$ref": "#/definitions/point",
+            "description": "Arc centre (arcs only). Always present for a stable schema."
+          },
+          "cw": { "type": "boolean", "description": "Arc direction flag (arcs only)." },
+          "feed": { "type": "number", "minimum": 0, "description": "mm/min. 0 = rapid." },
+          "spindle": { "type": "number", "minimum": 0, "description": "RPM. 0 = no change." },
+          "coolant": { "type": "string", "enum": ["off", "flood", "mist", "through"] },
+          "milling": { "type": "string", "enum": ["", "climb", "conventional"], "description": "Climb vs conventional (cutting moves)." },
+          "comment": { "type": "string" }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Free-form strategy context (e.g. per-segment engagement, model version).",
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "created_at": { "type": "string", "description": "ISO-8601 generation timestamp (informational)." }
+  },
+  "definitions": {
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "id": "demo-crib",
+  "name": "Demo tool crib",
+  "tools": [
+    {
+      "id": "endmill-10mm-4f",
+      "name": "10 mm 4-flute carbide end mill",
+      "kind": "flat_end_mill",
+      "diameter": 10.0,
+      "flutes": 4,
+      "corner_radius": 0.0,
+      "taper_angle": 0.0,
+      "flute_length": 25.0,
+      "overall_length": 75.0,
+      "shank_diameter": 10.0,
+      "material": "carbide",
+      "coating": "TiAlN",
+      "max_rpm": 24000,
+      "feeds": [
+        { "material": "aluminum-6061", "fz": 0.15, "vc": 200, "note": "climb, flood coolant" },
+        { "material": "steel-1018", "fz": 0.08, "vc": 80, "note": "climb, flood coolant" }
+      ]
+    },
+    {
+      "id": "ballnose-6mm-2f",
+      "name": "6 mm 2-flute ball-nose",
+      "kind": "ball_nose",
+      "diameter": 6.0,
+      "flutes": 2,
+      "corner_radius": 3.0,
+      "taper_angle": 0.0,
+      "flute_length": 20.0,
+      "overall_length": 60.0,
+      "shank_diameter": 6.0,
+      "material": "carbide",
+      "coating": "none",
+      "max_rpm": 18000,
+      "feeds": [
+        { "material": "aluminum-6061", "fz": 0.1, "vc": 150 },
+        { "material": "steel-1018", "fz": 0.05, "vc": 60 }
+      ]
+    },
+    {
+      "id": "bullnose-8mm-4f",
+      "name": "8 mm 4-flute bull nose (R1)",
+      "kind": "bull_nose",
+      "diameter": 8.0,
+      "flutes": 4,
+      "corner_radius": 1.0,
+      "taper_angle": 0.0,
+      "flute_length": 30.0,
+      "overall_length": 80.0,
+      "shank_diameter": 8.0,
+      "material": "carbide",
+      "coating": "AlCrN",
+      "max_rpm": 20000,
+      "feeds": [
+        { "material": "aluminum-6061", "fz": 0.12, "vc": 180 },
+        { "material": "steel-1018", "fz": 0.06, "vc": 70 }
+      ]
+    }
+  ]
+}
