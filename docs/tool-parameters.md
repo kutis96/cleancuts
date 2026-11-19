@@ -66,8 +66,13 @@ by the radius as a function of height above the tip, `r(z)`:
 This is the single abstraction that **2D offset** (use `r` at the working Z),
 **3D compensation** (offset the *surface*, not a point), **scallop height** (use
 the tip curvature), and **engagement/chip-load** (the engaged arc length depends
-on the shape) all consume. The current model already encodes it — the
-`tipRadius(z)` helper is a pure, testable addition, not a schema change. See
+on the shape) all consume.
+
+It is implemented as **`Tool.TipRadius(height)`** (`internal/tool/tipradius.go`),
+a pure, tested function — no schema change. `height` is measured up from the
+lowest tip point; it returns the cutting radius at that height, `0` above the
+cutting length, and a **refusing error** for kinds that are not 2.5D contour
+tools (drill, chamfer, face-mill) so compensation never guesses. See
 [surface-quality.md](surface-quality.md) for how this drives 3D finish quality.
 
 ### Process parameters
