@@ -520,3 +520,53 @@ behaviour is guaranteed by the module, not by every caller.
 
 **Related.** ADR-002 (analytic curves), ADR-006 (robustness), ADR-010 (never
 over-cut), ADR-011 (tip envelope), ADR-008 (composable stages).
+
+---
+
+## ADR-014 — Additive kernel/moves/gcode primitives for Phase 2 (Accepted)
+
+**Context.** ADR-013's `comp` module, ADR-012's safety gate, and the Phase 2
+planner all need shared 2D curve machinery that the v0.1 kernel does not yet
+have: line–arc and arc–arc intersections (the join resolution ADR-013 refers
+to as "kernel intersection primitives"), point-in-contour, point-to-curve
+distance, and a shared representation of a contour as a chain of lines and
+arcs (so import, compensation, and generation consume *one* contour model).
+The working agreement says spine changes need an ADR first; this records them
+as **additive**.
+
+**Decision.**
+
+1. `kernel` gains (additions only — no existing type, method, or invariant
+   changes):
+   - `Edge2` — a line segment or a circular arc (a value, not an interface);
+   - `Chain2` — an ordered chain of `Edge2`, open or closed, with
+     `SignedArea`, `Reversed`, `Len`, `Validate`;
+   - `LineArcIntersect`, `ArcArcIntersect` (exact, analytic, finite-domain);
+   - `PointInContour` (even-odd; a point on the boundary reports *outside*);
+   - `PointToSegmentDist`, `PointToArcDist`, `PointToChainDist`.
+2. **An arc is not a full circle.** `Arc2` sweep is in the open interval
+   `(0, 2π)`; a full circle is represented as two or more arcs (two halves or
+   four quarters). This keeps CW/CCW and start/end unambiguous for every
+   consumer (comp, gcode, GUI). Full-circle special cases are a known
+   limitation, documented, not a silent branch.
+3. `moves` gains `Program` — an ordered list of `Path`s, the unit of a job the
+   CLI writes to disk and the GUI will render. Additive only.
+4. `gcode` gains `EmitProgram` — render a `Program` as one G-code file with
+   per-path setup/teardown and a single program end. Additive only; `Emit`
+   (single path) is unchanged.
+5. The safety gate for keep-out volumes (ADR-012) is a **consumer package**
+   (`internal/safety`), not a spine change: it tests tool-envelope shapes
+   (disc / capsule / annular sector) against the fixture's volumes using
+   convex-separating-axis tests — analytic, no tessellation (ADR-002).
+
+**Consequences.**
+
+- `comp`, `safety`, `plan`, import, and generation share one contour model, so
+  there is exactly one place to get "line vs arc" wrong (kernel), and it is
+  tested once.
+- The spine diff for Phase 2 is small and additive; ADR-001…013 are untouched.
+- The full-circle rule is explicit and testable; consumers never branch on
+  "is this almost 2π?".
+
+**Related.** ADR-002 (analytic curves), ADR-006 (robustness), ADR-012 (keep-out
+safety), ADR-013 (comp), ADR-003 (moves format).
