@@ -31,22 +31,20 @@ func dedupe(ps []Point2) []Point2 {
 	return out
 }
 
-// LineArcIntersect returns the points at which the finite segment l meets the
-// arc a (0, 1, or 2 points).
-//
-// It solves the quadratic |A + t·d − C|² = R² for t ∈ [0, 1] and keeps the
-// hits whose angle lies on the arc's swept span, so the result is exact for
-// the finite shapes (no supporting-line artefacts). Tangency returns the
-// single point, not a duplicate.
-func LineArcIntersect(l Line2, a Arc2) []Point2 {
+// LineCircleIntersect returns the points at which the infinite line
+// containing l meets the full circle (centre c, radius r) (0, 1, or 2
+// points). Join resolution in comp (ADR-013) uses the supporting curve, not
+// the finite segment, because a mitre point lies beyond the segment's
+// endpoints. Tangency returns the single point, not a duplicate.
+func LineCircleIntersect(l Line2, c Point2, r float64) []Point2 {
 	d := l.Vec()
-	f := l.Start.Sub(a.Center)
+	f := l.Start.Sub(c)
 	aa := d.Dot(d)
 	if !IsFinite(aa) || aa < AbsTol {
 		return nil // degenerate segment
 	}
 	bb := 2 * f.Dot(d)
-	cc := f.Dot(f) - a.Radius*a.Radius
+	cc := f.Dot(f) - r*r
 	disc := bb*bb - 4*aa*cc
 	if disc < -AbsTol {
 		return nil
@@ -57,38 +55,30 @@ func LineArcIntersect(l Line2, a Arc2) []Point2 {
 	sq := math.Sqrt(disc)
 	var hits []Point2
 	for _, t := range []float64{(-bb - sq) / (2 * aa), (-bb + sq) / (2 * aa)} {
-		if !IsFinite(t) || t < -AbsTol || t > 1+AbsTol {
+		if !IsFinite(t) {
 			continue
 		}
-		p := l.PointAt(Clamp(t, 0, 1))
-		if a.inArc(p) {
-			hits = append(hits, p)
-		}
+		hits = append(hits, l.Start.Add(d.Scale(t)))
 	}
 	return dedupe(hits)
 }
 
-// ArcArcIntersect returns the points at which the two arcs meet (0, 1, or 2).
-//
-// It solves the circle–circle intersection and keeps the candidates that lie
-// on both swept spans. Concentric arcs never meet transversely and return
-// nil. Tangency returns the single point, not a duplicate.
-func ArcArcIntersect(a, b Arc2) []Point2 {
-	d := b.Center.Sub(a.Center)
-	dist := d.Len()
+// CircleCircleIntersect returns the points at which the two full circles
+// meet (0, 1, or 2 points). Concentric or nested circles return nil.
+func CircleCircleIntersect(c1 Point2, r1 float64, c2 Point2, r2 float64) []Point2 {
+	dist := c2.Dist(c1)
 	if !IsFinite(dist) || dist < AbsTol {
 		return nil // concentric (or coincident centres)
 	}
-	if dist > a.Radius+b.Radius+AbsTol {
+	if dist > r1+r2+AbsTol {
 		return nil // circles too far apart
 	}
-	if dist < math.Abs(a.Radius-b.Radius)-AbsTol {
+	if dist < math.Abs(r1-r2)-AbsTol {
 		return nil // one circle inside the other
 	}
-	u := d.Norm()
-	// Distance from a's centre to the radical line.
-	aa := (a.Radius*a.Radius - b.Radius*b.Radius + dist*dist) / (2 * dist)
-	h2 := a.Radius*a.Radius - aa*aa
+	u := c2.Sub(c1).Norm()
+	a := (r1*r1 - r2*r2 + dist*dist) / (2 * dist)
+	h2 := r1*r1 - a*a
 	if h2 < -AbsTol {
 		return nil
 	}
@@ -96,17 +86,41 @@ func ArcArcIntersect(a, b Arc2) []Point2 {
 		h2 = 0
 	}
 	h := math.Sqrt(h2)
-	base := a.Center.Add(u.Scale(aa))
-	var hits []Point2
-	for _, p := range []Point2{
+	base := c1.Add(u.Scale(a))
+	return dedupe([]Point2{
 		base.Add(u.LeftPerp().Scale(h)),
 		base.Add(u.LeftPerp().Scale(-h)),
-	} {
-		if a.inArc(p) && b.inArc(p) {
-			hits = append(hits, p)
+	})
+}
+
+// LineArcIntersect returns the points at which the finite segment l meets the
+// arc a (0, 1, or 2 points). It is LineCircleIntersect filtered to the
+// segment range and the arc's swept span, so the result is exact for the
+// finite shapes (no supporting-line artefacts).
+func LineArcIntersect(l Line2, a Arc2) []Point2 {
+	var out []Point2
+	for _, p := range LineCircleIntersect(l, a.Center, a.Radius) {
+		if !onSegment(l.Start, l.End, p) {
+			continue
+		}
+		if a.inArc(p) {
+			out = append(out, p)
 		}
 	}
-	return dedupe(hits)
+	return out
+}
+
+// ArcArcIntersect returns the points at which the two arcs meet (0, 1, or
+// 2). It is CircleCircleIntersect filtered to both swept spans. Concentric
+// arcs never meet transversely and return nil.
+func ArcArcIntersect(a, b Arc2) []Point2 {
+	var out []Point2
+	for _, p := range CircleCircleIntersect(a.Center, a.Radius, b.Center, b.Radius) {
+		if a.inArc(p) && b.inArc(p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // CurveIntersect returns the intersection points of two edges (any mix of
