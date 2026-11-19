@@ -16,8 +16,8 @@ import (
 	"math"
 	"strings"
 
-	"github.com/spacecat/cleancuts/internal/kernel"
-	"github.com/spacecat/cleancuts/internal/moves"
+	"github.com/kutis96/cleancuts/internal/kernel"
+	"github.com/kutis96/cleancuts/internal/moves"
 )
 
 // Options configure the generic G-code emitter.

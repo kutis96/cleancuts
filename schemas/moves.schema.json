@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/spacecat/cleancuts/schemas/moves.schema.json",
+  "$id": "https://github.com/kutis96/cleancuts/schemas/moves.schema.json",
   "title": "CleanCuts toolpath (moves)",
   "description": "The machine-independent intermediate toolpath format. See docs/gcode.md. Coordinates are the canonical WCS: right-handed, Z-up, millimetres.",
   "type": "object",

@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/spacecat/cleancuts/internal/kernel"
+	"github.com/kutis96/cleancuts/internal/kernel"
 )
 
 // Path is a single continuous chain of Moves producing one pass of one

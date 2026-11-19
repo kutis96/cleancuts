@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/spacecat/cleancuts/schemas/tool.schema.json",
+  "$id": "https://github.com/kutis96/cleancuts/schemas/tool.schema.json",
   "title": "CleanCuts tool",
   "description": "A single cutting tool. See docs/tool-parameters.md for the meaning of each field and the feed/speed model.",
   "type": "object",

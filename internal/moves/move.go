@@ -21,7 +21,7 @@ package moves
 import (
 	"fmt"
 
-	"github.com/spacecat/cleancuts/internal/kernel"
+	"github.com/kutis96/cleancuts/internal/kernel"
 )
 
 // Kind classifies a Move by its motion type.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spacecat/cleancuts/internal/kernel"
+	"github.com/kutis96/cleancuts/internal/kernel"
 )
 
 func validRapid() Move {

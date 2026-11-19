@@ -16,10 +16,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spacecat/cleancuts/internal/gcode"
-	"github.com/spacecat/cleancuts/internal/kernel"
-	"github.com/spacecat/cleancuts/internal/moves"
-	"github.com/spacecat/cleancuts/internal/toolpath"
+	"github.com/kutis96/cleancuts/internal/gcode"
+	"github.com/kutis96/cleancuts/internal/kernel"
+	"github.com/kutis96/cleancuts/internal/moves"
+	"github.com/kutis96/cleancuts/internal/toolpath"
 )
 
 const version = "0.1.0"

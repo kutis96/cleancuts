@@ -17,8 +17,8 @@ package toolpath
 import (
 	"fmt"
 
-	"github.com/spacecat/cleancuts/internal/kernel"
-	"github.com/spacecat/cleancuts/internal/moves"
+	"github.com/kutis96/cleancuts/internal/kernel"
+	"github.com/kutis96/cleancuts/internal/moves"
 )
 
 // ProfileParams configures a 2D profile (contour) toolpath.
