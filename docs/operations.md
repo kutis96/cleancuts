@@ -12,10 +12,16 @@ Cuts the outline of a part (material inside the contour) or the boundary of a
 pocket (material outside). v0.1 implements the geometry: a closed contour →
 plunge, cutting loop, retract. See `internal/toolpath/profile.go`.
 
-**Open for phase 2:**
+**Phase 2 (in progress):**
+- **Analytic loops:** the contour is a `kernel.Chain2` (lines *and* arcs). The
+  generator `toolpath.Loop` emits each edge as an analytic move (line → G1-
+  capable, arc → G2/G3-capable `moves` arc move) — no tessellation in the core
+  (ADR-002). `Profile` is `Loop` over a polygon chain.
 - **Cutter compensation:** offset the contour by the tool radius, with correct
   *inside vs. outside* semantics (profile cuts offset outward; pocket walls
-  offset inward) and corner joins (mitre now, fillet/arc later).
+  offset inward) and corner joins (mitre/chamfer/fillet — see
+  [cutter-compensation.md](cutter-compensation.md)). `comp` is done; composing
+  it in front of `Loop` is the next step.
 - **Climb vs. conventional** per contour (see below).
 
 ### Pocket (2D) — *phase 3*

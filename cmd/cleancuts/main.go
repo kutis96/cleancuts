@@ -1,5 +1,5 @@
 // Command cleancuts is the CleanCuts command-line interface. It wraps the
-// machine-independent core and, in v0.1, provides:
+// machine-independent core and provides:
 //
 //	cleancuts version     print the version
 //	cleancuts demo        generate a sample 2D profile and emit generic G-code
@@ -73,18 +73,23 @@ func demo(args []string) error {
 		return err
 	}
 
-	// A 100 x 60 mm rectangle to profile, in the canonical Z-up WCS.
-	poly := []kernel.Point2{
-		kernel.P2(0, 0), kernel.P2(100, 0), kernel.P2(100, 60), kernel.P2(0, 60),
+	// A 100 x 60 mm rounded rectangle (10 mm corners) to profile, in the
+	// canonical Z-up WCS. Lines and arcs travel as analytic moves; the
+	// emitter decides whether the controller gets G2/G3 or G1 tessellation.
+	chain, err := roundedRect(100, 60, 10)
+	if err != nil {
+		return err
 	}
-	p, err := toolpath.Profile(poly, toolpath.ProfileParams{
-		Milling: moves.MillingClimb,
-		Feed:    *feed,
-		Spindle: 8000,
-		SafeZ:   *safeZ,
-		CutZ:    *cutZ,
-		Coolant: moves.CoolantFlood,
-		ToolID:  "endmill-10mm-4f",
+	p, err := toolpath.Loop(chain, toolpath.LoopParams{
+		Operation: "profile",
+		Name:      "demo rounded rectangle",
+		Milling:   moves.MillingClimb,
+		Feed:      *feed,
+		Spindle:   8000,
+		SafeZ:     *safeZ,
+		CutZ:      *cutZ,
+		Coolant:   moves.CoolantFlood,
+		ToolID:    "endmill-10mm-4f",
 	})
 	if err != nil {
 		return err
@@ -92,11 +97,43 @@ func demo(args []string) error {
 
 	opts := gcode.DefaultOptions()
 	opts.UseArms = !*noArms
-	opts.HeaderLines = []string{"% CleanCuts demo — 2D profile of a 100x60 rectangle"}
+	opts.HeaderLines = []string{"% CleanCuts demo — 2D profile of a 100x60 rounded rectangle"}
 	out, err := gcode.Emit(p, opts)
 	if err != nil {
 		return err
 	}
 	fmt.Print(out)
 	return nil
+}
+
+// roundedRect builds a CCW rounded-rectangle chain (lines + quarter arcs).
+func roundedRect(w, h, r float64) (kernel.Chain2, error) {
+	P := kernel.P2
+	edges := []kernel.Edge2{
+		mustEdge(P(r, 0), P(w-r, 0)),
+		mustArc(P(w-r, r), P(w-r, 0), P(w, r)),
+		mustEdge(P(w, r), P(w, h-r)),
+		mustArc(P(w-r, h-r), P(w, h-r), P(w-r, h)),
+		mustEdge(P(w-r, h), P(r, h)),
+		mustArc(P(r, h-r), P(r, h), P(0, h-r)),
+		mustEdge(P(0, h-r), P(0, r)),
+		mustArc(P(r, r), P(0, r), P(r, 0)),
+	}
+	return kernel.NewChain2(edges)
+}
+
+func mustEdge(a, b kernel.Point2) kernel.Edge2 {
+	e, err := kernel.NewLineEdge(a, b)
+	if err != nil {
+		panic(err) // demo fixture: a bad constant is a bug, not user input
+	}
+	return e
+}
+
+func mustArc(c, a, b kernel.Point2) kernel.Edge2 {
+	e, err := kernel.NewArcEdge(c, a, b, false)
+	if err != nil {
+		panic(err)
+	}
+	return e
 }

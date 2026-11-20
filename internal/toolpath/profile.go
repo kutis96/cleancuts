@@ -1,13 +1,12 @@
 // Package toolpath generates machine-independent toolpaths (moves.Path) from
-// part geometry. In v0.1 it provides a 2D profile generator for closed,
-// planar contours.
+// part geometry.
 //
 // Deliberate scope notes:
 //   - Cutter compensation (offsetting the contour by the tool radius) is a
-//     dedicated, heavily-tested module that composes in front of these
-//     generators, not a side effect of them.
-//   - Fillet (arc) corner joins and adaptive/trochoidal strategies are phase
-//     2; see docs/operations.md and docs/roadmap.md.
+//     dedicated, heavily-tested module (comp) that composes in front of these
+//     generators, not a side effect of them (ADR-008).
+//   - Adaptive/trochoidal strategies are later phases; see
+//     docs/operations.md and docs/roadmap.md.
 //
 // Keeping generation, compensation, and post-processing as separate, composable
 // modules is what makes each one independently testable and lets us swap a
@@ -43,70 +42,37 @@ type ProfileParams struct {
 //
 // The polygon is used directly as the tool-centre path. A single plunge at
 // the first vertex and a single retract back to SafeZ frame the cutting loop.
-// Corners are joined with sharp mitres; fillet joins are a phase-2 concern.
+// It is Loop over the polygon's chain (lines only).
 func Profile(poly []kernel.Point2, p ProfileParams) (moves.Path, error) {
-	n := len(poly)
-	if n < 3 {
-		return moves.Path{}, fmt.Errorf("toolpath: profile needs >= 3 vertices (got %d)", n)
+	if len(poly) < 3 {
+		return moves.Path{}, fmt.Errorf("toolpath: profile needs >= 3 vertices (got %d)", len(poly))
 	}
-	if p.Feed <= 0 {
-		return moves.Path{}, fmt.Errorf("toolpath: profile feed must be > 0 (got %g)", p.Feed)
+	chain, err := polygonChain(poly)
+	if err != nil {
+		return moves.Path{}, fmt.Errorf("toolpath: profile: %w", err)
 	}
-	if p.CutZ >= p.SafeZ {
-		return moves.Path{}, fmt.Errorf("toolpath: CutZ (%g) must be strictly below SafeZ (%g)", p.CutZ, p.SafeZ)
-	}
-	for i := 0; i < n; i++ {
-		if !poly[i].Finite() {
-			return moves.Path{}, fmt.Errorf("toolpath: profile vertex %d is not finite: %v", i, poly[i])
-		}
-		if poly[i].Eq(poly[(i+1)%n], kernel.AbsTol) {
-			return moves.Path{}, fmt.Errorf("toolpath: profile has a zero-length edge between vertices %d and %d", i, (i+1)%n)
-		}
-	}
-
-	at := func(v kernel.Point2, z float64) kernel.Point3 {
-		return kernel.Point3{X: v.X, Y: v.Y, Z: z}
-	}
-
-	out := moves.Path{
-		ID:        "profile",
-		Name:      "2D profile",
+	return Loop(chain, LoopParams{
 		Operation: "profile",
+		Name:      "2D profile",
+		Milling:   p.Milling,
+		Feed:      p.Feed,
+		Spindle:   p.Spindle,
+		SafeZ:     p.SafeZ,
+		CutZ:      p.CutZ,
+		Coolant:   p.Coolant,
 		ToolID:    p.ToolID,
-		Pass:      1,
-	}
-
-	// Plunge.
-	out.Moves = append(out.Moves, moves.Move{
-		Kind:    moves.KindRapid,
-		From:    at(poly[0], p.SafeZ),
-		To:      at(poly[0], p.CutZ),
-		Spindle: p.Spindle,
-		Coolant: p.Coolant,
-		Comment: "plunge",
 	})
-	// Cutting loop.
-	for i := 1; i <= n; i++ {
-		out.Moves = append(out.Moves, moves.Move{
-			Kind:    moves.KindLinear,
-			From:    at(poly[(i-1)%n], p.CutZ),
-			To:      at(poly[i%n], p.CutZ),
-			Feed:    p.Feed,
-			Spindle: p.Spindle,
-			Coolant: p.Coolant,
-			Milling: p.Milling,
-		})
-	}
-	// Retract.
-	out.Moves = append(out.Moves, moves.Move{
-		Kind:    moves.KindRapid,
-		From:    at(poly[0], p.CutZ),
-		To:      at(poly[0], p.SafeZ),
-		Comment: "retract",
-	})
+}
 
-	if err := out.Validate(); err != nil {
-		return moves.Path{}, fmt.Errorf("toolpath: profile produced invalid path: %w", err)
+// polygonChain builds a closed chain of line edges from polygon vertices.
+func polygonChain(poly []kernel.Point2) (kernel.Chain2, error) {
+	var edges []kernel.Edge2
+	for i := range poly {
+		e, err := kernel.NewLineEdge(poly[i], poly[(i+1)%len(poly)])
+		if err != nil {
+			return kernel.Chain2{}, fmt.Errorf("edge %d: %w", i, err)
+		}
+		edges = append(edges, e)
 	}
-	return out, nil
+	return kernel.NewChain2(edges)
 }
