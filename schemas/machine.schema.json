@@ -37,6 +37,11 @@
       }
     },
     "spindle_max_rpm": { "type": "number", "minimum": 0 },
+    "spindle_rotation": {
+      "type": "string",
+      "enum": ["ccw", "cw"],
+      "description": "Spindle direction viewed from above (looking down -Z). Absent = 'ccw' (the common right-handed mill). Planning uses this to derive climb/conventional traversal (ADR-005, ADR-009)."
+    },
     "wcs": { "type": "string", "description": "Work coordinate word, e.g. 'G54'." },
     "safe_height": { "type": "number", "description": "Default rapid safe height (mm or in)." },
     "tool_change": { "type": "string", "description": "Tool word, e.g. 'T'." },

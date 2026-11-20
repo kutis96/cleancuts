@@ -53,9 +53,14 @@ type Machine struct {
 	Units         string  `json:"units"` // "mm" or "inch"
 	Axes          []Axis  `json:"axes"`
 	SpindleMaxRPM float64 `json:"spindle_max_rpm"`
-	WCS           string  `json:"wcs"`         // e.g. "G54"
-	SafeHeight    float64 `json:"safe_height"` // mm
-	ToolChange    string  `json:"tool_change"` // e.g. "T"
+	// SpindleRotation is the spindle direction viewed from above (looking
+	// down -Z): "ccw" (the common right-handed mill) or "cw". Empty means
+	// "ccw". Planning uses it to derive climb/conventional orientations
+	// (ADR-005, ADR-009).
+	SpindleRotation string  `json:"spindle_rotation"`
+	WCS             string  `json:"wcs"`         // e.g. "G54"
+	SafeHeight      float64 `json:"safe_height"` // mm
+	ToolChange      string  `json:"tool_change"` // e.g. "T"
 	// Feed and rapid limits (per units, e.g. mm/min). These are the bounds the
 	// feed/rapid scheduler enforces (ADR-010): cutting moves clamp to
 	// [min_feed, max_feed], rapid moves to [min_rapid, max_rapid]. A value of 0
@@ -65,6 +70,13 @@ type Machine struct {
 	MaxRapid      float64       `json:"max_rapid"`
 	MinRapid      float64       `json:"min_rapid"`
 	PostProcessor PostProcessor `json:"post_processor"`
+}
+
+// SpindleCCW reports whether the spindle turns counter-clockwise viewed
+// from above. The empty value defaults to the common right-handed (CCW)
+// convention.
+func (m Machine) SpindleCCW() bool {
+	return m.SpindleRotation != "cw"
 }
 
 // Validate enforces machine-level invariants.
@@ -88,6 +100,9 @@ func (m Machine) Validate() error {
 	}
 	if m.SpindleMaxRPM < 0 {
 		return fmt.Errorf("machine %q: spindle_max_rpm must be >= 0 (got %g)", m.ID, m.SpindleMaxRPM)
+	}
+	if m.SpindleRotation != "" && m.SpindleRotation != "ccw" && m.SpindleRotation != "cw" {
+		return fmt.Errorf("machine %q: spindle_rotation must be \"ccw\" or \"cw\" (got %q)", m.ID, m.SpindleRotation)
 	}
 	if m.MinFeed < 0 || m.MaxFeed < 0 || m.MinRapid < 0 || m.MaxRapid < 0 {
 		return fmt.Errorf("machine %q: feed and rapid limits must be >= 0", m.ID)

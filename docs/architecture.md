@@ -60,22 +60,30 @@ generation then executes (ADR-009):
 - **Feed/speed intent:** resolve the tool's `feeds[]` + `max_rpm` into target
   spindle/feed, to be clamped by the machine limits (ADR-010).
 
-In v0.1 the caller supplies these (the profile command's params *are* a minimal
-plan); the dedicated planner package lands in phase 2.
+**Phase 2 (in progress):** the dedicated planner package
+**`internal/planning`** implements the milling-mode half of this stage: it
+derives the climb/conventional decision from feature kind + spindle rotation
+(`spindle_rotation` in the machine config), orients the contour to achieve it,
+and picks a start vertex outside the keep-out zones (hard constraint). Its
+model is in [planning.md](planning.md). Still to come: strategy selection,
+pass structure, feed/speed resolution, and entry/approach vectors.
 
 ### Stage 2 — Toolpath generation
 
-- **`internal/toolpath`** turns geometry into `moves.Path`. v0.1 ships `Profile`
-  (a closed 2D contour → plunge, cutting loop, retract). Later phases add pocket,
-  facing, adaptive/trochoidal, and 3D strategies, each as its own function or
-  module producing `moves.Path`.
-- **Cutter compensation** (offsetting a contour by the tool radius, with correct
-  inside/outside semantics and corner joins) is deliberately a *separate* module
-  (`comp`) that composes in front of the generators — specified in
-  [cutter-compensation.md](cutter-compensation.md) and guaranteed safe-by-
-  construction (never over-cuts; ADR-013). Keeping it separate means "profile
-  with offset" and "profile without offset" are the same generator with different
-  inputs.
+- **`internal/toolpath`** turns geometry into `moves.Path`. **`Loop`** is the
+  core generator: any `kernel.Chain2` (lines *and* arcs) → plunge, one analytic
+  move per edge (arcs stay analytic; the emitter decides G2/G3 vs. tessellation),
+  retract. **`Profile`** is `Loop` over a polygon chain. Later phases add
+  pocket, facing, adaptive/trochoidal, and 3D strategies, each as its own
+  function or module producing `moves.Path`.
+- **`internal/comp`** (cutter compensation) offsets a contour by the tool
+  radius with correct inside/outside semantics, corner joins (mitre / chamfer /
+  fillet), and safe resolution of too-narrow features (drop + report, or refuse
+  with `ErrTooLarge` — never over-cut; ADR-013). It composes in front of the
+  generators as a separate, tested module — specified in
+  [cutter-compensation.md](cutter-compensation.md). Keeping it separate means
+  "profile with offset" and "profile without offset" are the same generator
+  with different inputs.
 
 ### Stage 3 — The interchange format
 

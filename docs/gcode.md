@@ -114,6 +114,8 @@ varies *only* the dialect and framing, never the geometry:
 - `dialect` (`grbl`, `linuxcnc`, `fanuc`, `generic`).
 - `units` (`mm` / `inch`) — the *only* place units conversion happens (ADR-001).
 - `axes` — letters, travel, max feed/rapid (for bounds checks and lookahead).
+- `spindle_rotation` — `ccw` (default) or `cw`, viewed from above; planning uses
+  it to derive climb/conventional traversal (ADR-005, ADR-009).
 - `wcs` — the work coordinate word (e.g. `G54`).
 - `post_processor` — M-codes, arc format (`ij` / `absolute`), header/footer lines.
 
