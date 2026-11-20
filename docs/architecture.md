@@ -37,6 +37,13 @@ state.
   `Vec2/Point2`, `Vec3/Point3`, `Line2`, `Arc2`, intersection predicates, and the
   tolerance model (`kernel.AbsTol`). It has **no dependencies** and **no
   knowledge of CAM** — it is a pure, tested geometry library.
+- **`internal/mesh`** is the boundary/import module for part geometry
+  (ADR-017): pure STL (ASCII + binary) and 3MF parsers over in-memory bytes,
+  a validated triangle-soup `Mesh` in the canonical WCS, and **`Slice(z)`** —
+  the section primitive that yields the closed 2D contours the planner needs
+  (slicing strictly between `VertexZs()` levels; the coplanar case is refused
+  with a precise error rather than a silent polygon-boolean). File I/O stays in
+  the CLI. See [mesh.md](mesh.md).
 - **Feature planning** (detecting pockets, profiles, faces; deciding which
   operation applies where) is a stage that will sit on top of the kernel plus the
   imported part/stock geometry. In v0.1 the "feature" is implicit (the caller

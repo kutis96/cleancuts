@@ -44,6 +44,12 @@ G-code.
 
 Goal: machine a real part's 2D features correctly.
 
+**Slice status (F→L):** F `toolpath.Loop` ✅ · G `planning` (milling mode,
+orientation, keep-out entry) ✅ · H `safety` envelope gate ✅ · I `stock`
+model ✅ · J `mesh` (STL ASCII/binary, 3MF, `Slice(z)`) ✅ · K `part` recipe +
+planner composition ◀ next · L CLI `generate` (`moves.Program` +
+`gcode.EmitProgram` still to build).
+
 - [ ] **Part import:** STL and 3MF (triangle mesh) importers that normalise into
       the canonical frame (ADR-001) and extract 2D contours (planar face
       detection). B-rep import is a separate, higher-effort effort — defer to a
