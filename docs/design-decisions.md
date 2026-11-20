@@ -649,3 +649,68 @@ point-bearing config types (stock, later mesh) match their schemas.
   spine changes are decided, not incidental.
 
 **Related.** ADR-007 (config is data), ADR-015 (stock as data).
+
+## ADR-017 — Mesh import is a boundary module; Slice(z) is the clean-case section primitive (Accepted)
+
+**Context.** Phase 2's exit needs real part geometry: STL and 3MF importers
+that yield 2D contours at heights (roadmap, phase 2). A *general* robust
+planar section of a triangle mesh — coplanar faces, T-junctions,
+non-manifold input, sliver triangles — is a 2D polygon-boolean problem, the
+exact class of subsystem where open-source CAM tools accumulate their worst
+bugs (and where our "floating-point precision" complaints come from). v1
+parts are 2.5D, and their contours are obtained exactly by slicing the solid
+*between* face heights — the same way a slicer takes 2.5D contours. We want
+that case to be exact, tested, and honest about what it does not do.
+
+**Decision.**
+
+1. **`internal/mesh` is a boundary/import module** (Law 1, Law 4): pure
+   functions `ParseSTL(data []byte)` and `Parse3MF(data []byte)` over
+   in-memory bytes (the CLI does the file I/O, keeping `internal/` pure),
+   returning a `Mesh` value already in the canonical WCS (mm). The 3MF
+   `unit` attribute is honoured exactly once, at import (millimeter is the
+   default; inch/centimeter convert; other units are rejected with a precise
+   error). Parsing uses the standard library only (`encoding/xml`,
+   `archive/zip` for 3MF) — no new dependencies (ADR-004).
+2. **`Mesh` is a triangle soup:** `Vertices []kernel.Point3` + index
+   triples, with `Validate()` (finite, in-range, non-degenerate triangles),
+   `VertexZs()` (sorted distinct vertex heights), `Bounds()`, and
+   `IsClosedMesh()` (each undirected edge in exactly two triangles — the
+   watertightness diagnostic the CLI reports).
+3. **`Slice(z)` returns the closed intersection loops** of the solid with
+   the horizontal plane z, as `[]kernel.Chain2` of line segments, in the
+   mesh's own winding (consumers measure `SignedArea`, never assume — ADR-001).
+   It is defined for the **clean case**: every triangle is fully above, fully
+   below, or straddles the plane with exactly one crossing segment. The
+   intersection graph is then 2-regular (each crossing point joins exactly
+   two segments) and stitches into closed loops deterministically.
+4. **Unsafe input gets a precise, actionable error, never a silent
+   contour:** a plane through a vertex or along an edge (within `AbsTol`)
+   reports the offending vertex and suggests a valid z from
+   `VertexZs()` (e.g. the midpoint of adjacent levels — the documented rule
+   for 2.5D contour extraction); a dangling crossing point (non-manifold
+   intersection) names the point and the segment count. This is Law 7 in
+   import form: the safe failure is refusing to extract, not extracting
+   wrong.
+5. **Coplanar (face-height) sectioning, T-junctions, and non-manifold
+   stitching are v1 limitations**, documented with their precise errors.
+   They are a later refinement (or a B-rep import) — not a silent v1
+   behaviour.
+
+**Consequences.**
+
+- No polygon-boolean engine in v1: the hard, bug-prone part is deferred
+  with a *specified* contract and precise errors instead of hidden wrongness.
+- The planner/CLI rule for 2.5D contours is small and testable: *slice at a
+  z strictly between adjacent `VertexZs()` levels* (midpoint rule), which is
+  exact for prismatic parts and what real slicers do.
+- Import is a swappable boundary module: STL/3MF/STEP can come and go
+  without touching the spine; `Mesh` and `Slice` are the stable seam for
+  the part/planner composition (slice K) and for a future mesh stock behind
+  the same surface (ADR-015).
+- 3MF's `unit` handling pins the one-legal-place-for-units rule (ADR-001):
+  conversion at import, never later.
+
+**Related.** ADR-001 (one coordinate system, units once at the boundary),
+ADR-004 (no deps in internal/), ADR-015 (mesh stock behind the same
+surface), ADR-016 (point JSON form), roadmap phase 2 (part import).
