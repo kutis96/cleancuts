@@ -111,6 +111,15 @@ pass structure, feed/speed resolution, and entry/approach vectors.
 - **fixture / workholding** — keep-out zones (clamps, vise jaws, no-go regions)
   the tool must never touch (ADR-012). See [workholding.md](workholding.md).
 
+### Safety gate
+
+- **`internal/safety`** verifies the tool *envelope* (tip-disc sweep: capsule
+  for lines, annular sector for arcs) against the keep-out footprints, with
+  exact analytic distances. `CheckChain` gates a planned tool-centre chain;
+  `CheckPath` gates a finished `moves.Path` (rapids and plunges included).
+  A touch is a collision; the safe failure is a precise refusal. See
+  [workholding.md](workholding.md).
+
 A complete, shareable **setup is a recipe**: `part + stock + fixture + tool +
 machine`, all portable JSON. That recipe is the unit the planner and the
 collision check consume, and the unit a shop keeps and moves.

@@ -70,6 +70,28 @@ independently testable function: a toolpath that clips a keep-out box is
 rejected; one that clears it is accepted. Adding a clamp to the setup is a **data
 change** (a new keep-out volume), not a code change (ADR-007).
 
+### The envelope test (implemented in `internal/safety`)
+
+At a cutting height `z`, a zone applies iff its Z range covers `z`; its XY
+footprint is the box projection (a rectangle) or the cylinder disc. The tool
+envelope of a move at that height is the sweep of its tip disc (radius `r`,
+the tool's tip-envelope radius at working Z — ADR-011):
+
+- **linear move** → a **capsule** (the segment plus the disc of radius `r`);
+- **arc move** → an **annular sector** (annulus radii `R−r`…`R+r` over the
+  arc's span).
+
+The gate is the exact 2D distance between that sweep and the zone footprint:
+**distance < `r` rejects the move** (tangent contact also rejects — touching a
+clamp is a collision, and the safe side is to refuse). The distance is
+analytic: point/segment-to-rectangle and -disc distances, segment-to-arc via
+the foot of the perpendicular and the arc endpoints, arc-to-rectangle via its
+four sides — all in the standard library, all unit-tested. `safety.CheckChain`
+gates a planned tool-centre chain; `safety.CheckPath` gates a finished
+`moves.Path` (including rapids and vertical plunges, which must clear the
+fixture too). The error names the move, the zone, and the distance — precise
+enough to fix the setup, not vague enough to guess.
+
 ## Example (a part in a vise)
 
 `examples/fixture/clamp_setup.json` declares a 100×60 part held by front/back
@@ -95,8 +117,13 @@ the collision check will reject any program whose tool envelope enters them.
 ## Status
 
 - **v0.1:** the fixture config model, schema, and example are defined (the
-  contract). The planner and collision check that consume it land in phases 2
-  (routing) and 4 (collision gate) — see [roadmap.md](roadmap.md).
+  contract).
+- **Phase 2 (in progress):** the planner picks entries clear of the zones
+  (`internal/planning`), and `internal/safety` implements the analytic
+  envelope test above (`CheckChain`, `CheckPath`). Both layers now exist;
+  the `generate` command (slice L) wires fixture JSON into them.
+- **Phase 4:** the gate extends to the kept-part volume and mesh keep-outs
+  (stock/mesh slices), and to full 3D tool envelopes (ballnoses, tapers).
 - **The point of declaring it now:** the *design* is settled (what a keep-out
   zone is, how it's specified, and that it's a hard constraint enforced in
   planning + collision), so when the routing and collision modules are built they
