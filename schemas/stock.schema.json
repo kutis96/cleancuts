@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/kutis96/cleancuts/schemas/stock.schema.json",
+  "title": "CleanCuts stock",
+  "description": "The finite solid of material the part is milled from. Exactly one of box / cylinder / prism. All geometry is the canonical WCS (right-handed, Z-up, millimetres). See ADR-015 and docs/stock.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "shape"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "Stable stock identifier." },
+    "name": { "type": "string", "description": "Human-readable name." },
+    "shape": { "type": "string", "enum": ["box", "cylinder", "prism"], "description": "Which geometry field is set." },
+    "box": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "description": "Axis-aligned box by opposite corners (WCS).",
+      "properties": {
+        "min": { "$ref": "#/definitions/point3" },
+        "max": { "$ref": "#/definitions/point3" }
+      }
+    },
+    "cylinder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["center", "radius", "min_z", "max_z"],
+      "description": "Vertical cylinder: centre in XY, radius, Z range.",
+      "properties": {
+        "center": { "$ref": "#/definitions/point2" },
+        "radius": { "type": "number", "exclusiveMinimum": 0 },
+        "min_z": { "type": "number" },
+        "max_z": { "type": "number" }
+      }
+    },
+    "prism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edges", "min_z", "max_z"],
+      "description": "A closed 2D footprint (lines and arcs) extruded over a Z range.",
+      "properties": {
+        "edges": {
+          "type": "array",
+          "minItems": 3,
+          "description": "Ordered footprint edges; consecutive edges share endpoints and the chain must close.",
+          "items": { "$ref": "#/definitions/edge" }
+        },
+        "min_z": { "type": "number" },
+        "max_z": { "type": "number" }
+      }
+    }
+  },
+  "oneOf": [
+    { "properties": { "shape": { "const": "box" } }, "required": ["shape", "box"] },
+    { "properties": { "shape": { "const": "cylinder" } }, "required": ["shape", "cylinder"] },
+    { "properties": { "shape": { "const": "prism" } }, "required": ["shape", "prism"] }
+  ],
+  "definitions": {
+    "point2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "point3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One footprint edge: exactly one of line or arc. An arc is never a full circle (ADR-014).",
+      "oneOf": [
+        {
+          "required": ["line"],
+          "properties": {
+            "line": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["start", "end"],
+              "properties": {
+                "start": { "$ref": "#/definitions/point2" },
+                "end": { "$ref": "#/definitions/point2" }
+              }
+            }
+          }
+        },
+        {
+          "required": ["arc"],
+          "properties": {
+            "arc": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["center", "start", "end", "cw"],
+              "properties": {
+                "center": { "$ref": "#/definitions/point2" },
+                "start": { "$ref": "#/definitions/point2" },
+                "end": { "$ref": "#/definitions/point2", "description": "Must be equidistant from center as start." },
+                "cw": { "type": "boolean", "description": "Sweep clockwise (true) or counter-clockwise (false) from start to end." }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

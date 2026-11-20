@@ -4,8 +4,13 @@ import "fmt"
 
 // Point3 is a position in the canonical XYZ space (mm), right-handed and
 // Z-up (ADR-001).
+//
+// The JSON form is the canonical lowercase {"x":…, "y":…, "z":…} spelling
+// used by every CleanCuts schema (ADR-016).
 type Point3 struct {
-	X, Y, Z float64
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
 }
 
 // P3 is a convenience constructor for Point3.

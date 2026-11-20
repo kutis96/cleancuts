@@ -108,6 +108,10 @@ pass structure, feed/speed resolution, and entry/approach vectors.
   [tool-parameters.md](tool-parameters.md).
 - **`internal/machine`** — portable machine + post-processor config (JSON). See
   [gcode.md](gcode.md).
+- **`internal/stock`** — the solid of material the part is milled from (ADR-015):
+  box / cylinder / prism, with the pure primitives `SectionAt(z)`, `TopAt(x,y)`,
+  `Contains(p)`, and the setup sanity gate `Fits`. Strategies consume `SectionAt`
+  and never see the stock's shape. See [stock.md](stock.md).
 - **fixture / workholding** — keep-out zones (clamps, vise jaws, no-go regions)
   the tool must never touch (ADR-012). See [workholding.md](workholding.md).
 

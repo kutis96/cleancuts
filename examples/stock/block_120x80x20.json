@@ -1,0 +1,9 @@
+{
+  "id": "block-120x80x20",
+  "name": "120 x 80 x 20 mm aluminium block",
+  "shape": "box",
+  "box": {
+    "min": { "x": -10, "y": -10, "z": 0 },
+    "max": { "x": 110, "y": 70, "z": 20 }
+  }
+}

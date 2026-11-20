@@ -1,0 +1,19 @@
+{
+  "id": "prism-rounded-80x50x12",
+  "name": "80 x 50 x 12 mm plate, corner radius 10",
+  "shape": "prism",
+  "prism": {
+    "edges": [
+      { "line": { "start": { "x": 10, "y": 0 }, "end": { "x": 70, "y": 0 } } },
+      { "arc":  { "center": { "x": 70, "y": 10 }, "start": { "x": 70, "y": 0 }, "end": { "x": 80, "y": 10 }, "cw": false } },
+      { "line": { "start": { "x": 80, "y": 10 }, "end": { "x": 80, "y": 40 } } },
+      { "arc":  { "center": { "x": 70, "y": 40 }, "start": { "x": 80, "y": 40 }, "end": { "x": 70, "y": 50 }, "cw": false } },
+      { "line": { "start": { "x": 70, "y": 50 }, "end": { "x": 10, "y": 50 } } },
+      { "arc":  { "center": { "x": 10, "y": 40 }, "start": { "x": 10, "y": 50 }, "end": { "x": 0, "y": 40 }, "cw": false } },
+      { "line": { "start": { "x": 0, "y": 40 }, "end": { "x": 0, "y": 10 } } },
+      { "arc":  { "center": { "x": 10, "y": 10 }, "start": { "x": 0, "y": 10 }, "end": { "x": 10, "y": 0 }, "cw": false } }
+    ],
+    "min_z": 0,
+    "max_z": 12
+  }
+}

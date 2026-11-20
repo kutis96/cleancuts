@@ -3,8 +3,12 @@ package kernel
 import "fmt"
 
 // Point2 is a position in the canonical XY plane (mm).
+//
+// The JSON form is the canonical lowercase {"x":…, "y":…} spelling used by
+// every CleanCuts schema (ADR-016).
 type Point2 struct {
-	X, Y float64
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 // P2 is a convenience constructor for Point2.

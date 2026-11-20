@@ -1,0 +1,11 @@
+{
+  "id": "cylinder-d60x15",
+  "name": "D60 x 15 mm billet",
+  "shape": "cylinder",
+  "cylinder": {
+    "center": { "x": 0, "y": 0 },
+    "radius": 30,
+    "min_z": 0,
+    "max_z": 15
+  }
+}

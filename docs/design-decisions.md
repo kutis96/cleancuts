@@ -570,3 +570,82 @@ as **additive**.
 
 **Related.** ADR-002 (analytic curves), ADR-006 (robustness), ADR-012 (keep-out
 safety), ADR-013 (comp), ADR-003 (moves format).
+---
+
+## ADR-015 — Stock is data; its XY section at a height is a pure primitive (Accepted)
+
+**Context.** The part is milled *from* something: a block of material with a
+finite top surface. Planning and safety need to know (a) what material exists
+at the cutting depth, (b) how high the stock top is at a given XY point (the
+plunge must start above it), and (c) that the part actually fits in the stock.
+Earlier CAM tools bake the stock into the strategies; that makes strategies
+less testable and the stock non-portable. The setup recipe is
+`part + stock + fixture + tool + machine` (ADR-012) — stock is the missing
+JSON citizen.
+
+**Decision.**
+
+1. **Stock is config data** (Law 6): a portable JSON document describing one
+   solid: a **box** (opposite corners in WCS), a **vertical cylinder**
+   (centre XY + radius + Z range), or a **prism** (a `kernel.Chain2` footprint
+   extruded over a Z range). These are the common cases; a mesh stock is a
+   later extension behind the same interface (the `mesh` slice's
+   `SectionAt`).
+2. **`SectionAt(z)` is a pure, tested primitive:** it returns the closed XY
+   chain of the stock's cross-section at height `z` (a box gives a rectangle,
+   a cylinder a circle as two half-arcs, a prism its footprint), or an error
+   when `z` is outside the stock's Z range. Consumers (planning, safety,
+   later roughing) call this one function instead of re-deriving geometry —
+   the same single-source-of-truth rule as the kernel contour primitives
+   (ADR-014).
+3. **Stock never re-frames coordinates.** All stock geometry is in the
+   canonical WCS (Z-up, mm, ADR-001); `SectionAt` projects to XY without
+   changing anything else.
+4. **Fits-check is a consumer of these primitives:** "the part's footprint
+   fits in the stock's section at the part's Z, with the stock top above the
+   part top" is a small pure check over `SectionAt` + `TopAt`, not a hidden
+   assumption inside a generator.
+
+**Consequences.**
+
+- Strategies stay pure: they consume a contour + a radius, and ask the stock
+  only "what is the section at z?" — no strategy knows what shape the stock is.
+- Adding a stock shape (mesh) is an additive extension of the `Stock` model
+  with the same `SectionAt`/`TopAt`/`Contains` surface; nothing downstream
+  changes.
+- The `generate` command (slice L) validates the recipe (part ⊆ stock, stock
+  top above part top, entries above the stock) with these primitives, and
+  reports precisely.
+
+**Related.** ADR-001 (one coordinate system), ADR-007 (config is data),
+ADR-012 (the setup recipe), ADR-014 (contour primitives).
+
+## ADR-016 — Kernel point types carry the canonical lowercase JSON form (Accepted)
+
+**Context.** Every JSON schema and example in this repository spells a point
+as `{"x": …, "y": …, "z": …}` (lowercase, Law 6). But `kernel.Point2` /
+`kernel.Point3` are plain Go structs with no JSON tags, so `moves.Path` —
+which embeds them (`from`, `to`, `center`) — serialises points as
+`{"X": …, "Y": …, "Z": …}`. The intermediate format's Go output therefore
+disagrees with its own schema, and any new config type containing points
+(e.g. the stock prism footprint, ADR-015) would inherit the same split.
+Two point representations is exactly the kind of drifting convention the
+JSON- Schema discipline (schemas + examples) exists to prevent.
+
+**Decision.** `kernel.Point2` and `kernel.Point3` get JSON tags for
+lowercase `x`, `y`, `z`. This is an additive, non-breaking change to the Go
+API (same fields, same values); it only pins the on-disk spelling to the
+already-decided schema convention. All other packages inherit the fix:
+`moves.Path` output now conforms to `schemas/moves.schema.json`, and
+point-bearing config types (stock, later mesh) match their schemas.
+
+**Consequences.**
+
+- One JSON point form repository-wide, enforced by the schemas, exemplified
+  by `examples/`, and now produced by the Go core itself.
+- Round-trip tests remain valid (they are self-consistent); no code reads or
+  writes these JSON keys directly outside `encoding/json`.
+- `kernel` is touched deliberately, with this ADR, per AGENTS.md's rule that
+  spine changes are decided, not incidental.
+
+**Related.** ADR-007 (config is data), ADR-015 (stock as data).
