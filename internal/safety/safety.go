@@ -260,7 +260,10 @@ func distSegmentRect(a, b, mn, mx kernel.Point2) float64 {
 	if d := distPointRect(b, mn, mx); d < best {
 		best = d
 	}
-	for _, v := range []kernel.Point2{{mn.X, mn.Y}, {mx.X, mn.Y}, {mn.X, mx.Y}, {mx.X, mx.Y}} {
+	for _, v := range []kernel.Point2{
+		kernel.P2(mn.X, mn.Y), kernel.P2(mx.X, mn.Y),
+		kernel.P2(mn.X, mx.Y), kernel.P2(mx.X, mx.Y),
+	} {
 		if d := distPointSegment(v, a, b); d < best {
 			best = d
 		}
@@ -330,10 +333,10 @@ func distSegmentArc(a, b kernel.Point2, arc kernel.Arc2) float64 {
 // closest pair lies on one of the four sides or at an arc endpoint.
 func distArcRect(arc kernel.Arc2, mn, mx kernel.Point2) float64 {
 	sides := [4][2]kernel.Point2{
-		{{mn.X, mn.Y}, {mx.X, mn.Y}},
-		{{mx.X, mn.Y}, {mx.X, mx.Y}},
-		{{mn.X, mx.Y}, {mx.X, mx.Y}},
-		{{mx.X, mx.Y}, {mn.X, mn.Y}},
+		{kernel.P2(mn.X, mn.Y), kernel.P2(mx.X, mn.Y)},
+		{kernel.P2(mx.X, mn.Y), kernel.P2(mx.X, mx.Y)},
+		{kernel.P2(mn.X, mx.Y), kernel.P2(mx.X, mx.Y)},
+		{kernel.P2(mx.X, mx.Y), kernel.P2(mn.X, mn.Y)},
 	}
 	best := math.Min(distPointRect(arc.Start(), mn, mx), distPointRect(arc.End(), mn, mx))
 	for _, s := range sides {
