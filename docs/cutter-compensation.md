@@ -70,17 +70,30 @@ join is one of:
 
 | Join | Construction | When |
 |---|---|---|
-| **Mitre** | intersect the two offset edges at point `M`; the centre path turns at `M`. | default for a sharp corner |
+| **Mitre** | intersect the two offset edges' supporting curves at point `M`; the centre path turns at `M`. | default for a sharp corner |
 | **Chamfer** | truncate the two offset edges at a bounded distance from `V`, join with a straight segment. | when the mitre would be too long (see mitre limit) |
-| **Fillet** | an arc of radius `r` centred at `V`, between the tangent points on the two offset edges. | when the boundary corner is rounded, or a rounded centre path is wanted |
+| **Fillet** | an arc of radius `FilletRadius` tangent to both offset edges, centred on the vertex side (the intersection of the two offset edges' `FilletRadius`-offsets toward `V`), between the tangent points. | when the boundary corner is rounded, or a rounded centre path is wanted |
+
+- **Mitre selection (two rules, both checked).** A supporting-curve
+  intersection `M` is the mitre only if (1) it lies **on the tool side of the
+  original contour** — the same `PointInContour` test safe resolution applies
+  to the whole offset — and (2) it is **reachable** from each offset edge's
+  join-side endpoint without passing the other endpoint (the trim to `M` must
+  not be zero-length or fold back). If two candidates qualify, the one
+  closest to `V` wins. If no candidate passes, the corner is *degenerate*
+  (the offset edges cross because the feature is narrower than the tool) and
+  the safe resolution is `ErrTooLarge`: refuse the contour, let the planner
+  retry with a smaller tool. Rule (1) is what makes inside offsets and
+  concave corners work: there the mitre lies *within* the offset edges' spans,
+  not beyond their endpoints.
 
 - **Mitre limit:** a sharp *acute* corner pushes the mitre point far out. Cap it —
   if the mitre point would extend beyond `mitre_limit · r` from `V`, switch to a
   **chamfer**. `mitre_limit` is config (typical default ≈ 5).
 - **Line↔arc and arc↔arc joins** are resolved by the corresponding intersection
-  (line–arc, arc–arc) from the kernel, choosing the point on the offset side.
-  These are exactly the `kernel` intersection primitives the design exists to
-  provide.
+  (line–circle, circle–circle) from the kernel, then filtered by the two mitre
+  selection rules above. These are exactly the `kernel` intersection
+  primitives the design exists to provide.
 
 **The circular-tool cusp (why a mitre is correct, not a bug).** For a circular
 tool at a sharp corner, the tool centre reaches the mitre point where it is
@@ -131,8 +144,11 @@ Analytic offsets with exact results, asserted to tight tolerance:
   `R − r` (inside). The cleanest case.
 - **Offset a square** side `L` by `r` → a larger square with mitre (or chamfer /
   fillet) corners at the expected analytic distances.
-- **Offset a tight notch** narrower than `2r` → the offset trims and reports the
-  feature unreachable; it never over-cuts.
+- **Offset a tight notch** narrower than `2r` → safe resolution, never an
+  over-cut: either the corner is degenerate (offset edges cross) and the
+  contour is refused with `ErrTooLarge`, or the unreachable region is dropped
+  and reported in the diagnostics. Both tell the planner to retry with a
+  smaller tool.
 - **Degenerate inputs:** collinear edges, zero-length features, `r` larger than
   the feature → explicit, safe behaviour + diagnostics.
 
@@ -153,8 +169,26 @@ Analytic offsets with exact results, asserted to tight tolerance:
 
 ## Status
 
-**v0.1:** design only (this doc + ADR-013). The `comp` module is the first
-*implementation* slice of Phase 2 — built in the order above, each step tested
-against the analytic cases here. Nothing here changes the spine, the `moves`
-format, or the kernel (beyond using the intersection primitives the kernel already
-provides).
+**v0.1:** slices 1–4 implemented and green (`internal/comp`):
+
+- ✅ per-edge offset (line shift, arc `R±r`, `ErrTooLarge` on degeneracy);
+- ✅ joins: mitre (with the two selection rules above), chamfer (incl.
+  mitre-limit fallback), fillet (tangent arc), tangent detection;
+- ✅ `Offset` assembly + self-intersection detection + safe resolution
+  (split at crossings, keep tool-reachable chains, drop the rest with a
+  warning diagnostic);
+- ✅ diagnostics (`Result.Diagnostics`, `Result.Unreachable()`).
+- ⬜ slice 5: compose with `toolpath.Profile` / a `toolpath.Pocket` (Phase 2,
+  next).
+
+Nothing here changes the spine, the `moves` format, or the kernel (beyond
+using the intersection primitives the kernel already provides).
+
+**Known v1 limitations (safe, documented — not bugs):**
+
+- A degenerate corner refuses the *whole* contour (`ErrTooLarge`); partial
+  per-feature offset (e.g. keep the outer loop of a U whose notch is too
+  narrow) is a future refinement.
+- Reachability classification samples points along each chain (5 per edge);
+  the exact split at self-intersections does the heavy lifting, and a
+  Phase-4 collision gate is the final defence.

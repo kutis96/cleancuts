@@ -32,9 +32,26 @@ func squareCorner() (prev, next kernel.Edge2, v kernel.Point2) {
 		kernel.P2(10, 0)
 }
 
+// squareContour is the 10×10 CCW square those squareCorner offset edges
+// come from — the kept boundary the joins must stay on the tool side of.
+func squareContour(t *testing.T) kernel.Chain2 {
+	t.Helper()
+	c, err := kernel.NewChain2([]kernel.Edge2{
+		line(kernel.P2(0, 0), kernel.P2(10, 0)),
+		line(kernel.P2(10, 0), kernel.P2(10, 10)),
+		line(kernel.P2(10, 10), kernel.P2(0, 10)),
+		line(kernel.P2(0, 10), kernel.P2(0, 0)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
 func TestJoinMitreLineLine(t *testing.T) {
 	prev, next, v := squareCorner()
-	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside})
+	orig := squareContour(t)
+	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside}, orig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +83,7 @@ func TestJoinMitreLimitFallsBackToChamfer(t *testing.T) {
 	prev, next, v := squareCorner()
 	// Mitre limit 0.5 (i.e. 1mm): the mitre point (12,-2) is sqrt(8) ≈ 2.83
 	// from the vertex, beyond the limit, so the join must chamfer.
-	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, MitreLimit: 0.5})
+	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, MitreLimit: 0.5}, squareContour(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +105,7 @@ func TestJoinMitreLimitFallsBackToChamfer(t *testing.T) {
 func TestJoinChamferExplicit(t *testing.T) {
 	prev, next, v := squareCorner()
 	// Explicit chamfer, limit 2 (i.e. 4mm).
-	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, Join: JoinChamfer, MitreLimit: 2})
+	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, Join: JoinChamfer, MitreLimit: 2}, squareContour(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +129,17 @@ func TestJoinMitreLineArc(t *testing.T) {
 	next := arc(kernel.P2(10, 0), kernel.P2(9, 0), kernel.P2(10, 1), true)
 	v := kernel.P2(8, 0)
 
-	r, err := resolveJoin(prev, next, v, Options{Radius: 1, Direction: Outside})
+	// The original D-contour: (0,0) -> (8,0) -> concave arc (centre (10,0),
+	// R=2) -> (10,2) -> (0,2). The kept material is its interior.
+	orig, err := kernel.NewChain2([]kernel.Edge2{
+		line(kernel.P2(0, 0), kernel.P2(8, 0)),
+		arc(kernel.P2(10, 0), kernel.P2(8, 0), kernel.P2(10, 2), true),
+		line(kernel.P2(10, 2), kernel.P2(0, 2)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := resolveJoin(prev, next, v, Options{Radius: 1, Direction: Outside}, orig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +175,17 @@ func TestJoinMitreArcArc(t *testing.T) {
 	next := arc(kernel.P2(5, 5), kernel.P2(-1, 5), kernel.P2(5, 11), true)
 	v := kernel.P2(0, 5)
 
-	r, err := resolveJoin(prev, next, v, Options{Radius: 1, Direction: Outside})
+	// The original (CW) lens: arc about (0,0) R=5, then arc about (5,5) R=5,
+	// closed by the line x=5. The material is the lens interior.
+	orig, err := kernel.NewChain2([]kernel.Edge2{
+		arc(kernel.P2(0, 0), kernel.P2(5, 0), kernel.P2(0, 5), false),
+		arc(kernel.P2(5, 5), kernel.P2(0, 5), kernel.P2(5, 10), true),
+		line(kernel.P2(5, 10), kernel.P2(5, 0)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := resolveJoin(prev, next, v, Options{Radius: 1, Direction: Outside}, orig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +215,8 @@ func TestJoinTangentLineArc(t *testing.T) {
 	// no trimming).
 	prev := line(kernel.P2(0, 0), kernel.P2(10, 0))
 	next := arc(kernel.P2(10, 5), kernel.P2(10, 0), kernel.P2(15, 5), false)
-	r, err := resolveJoin(prev, next, kernel.P2(10, 0), Options{Radius: 2})
+	orig := squareContour(t)
+	r, err := resolveJoin(prev, next, kernel.P2(10, 0), Options{Radius: 2}, orig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +232,8 @@ func TestJoinTangentArcArc(t *testing.T) {
 	// Two continuous arcs (same centre and radius) meeting at (0,5).
 	prev := arc(kernel.P2(0, 0), kernel.P2(5, 0), kernel.P2(0, 5), false)
 	next := arc(kernel.P2(0, 0), kernel.P2(0, 5), kernel.P2(-5, 0), false)
-	r, err := resolveJoin(prev, next, kernel.P2(0, 5), Options{Radius: 1})
+	orig := squareContour(t)
+	r, err := resolveJoin(prev, next, kernel.P2(0, 5), Options{Radius: 1}, orig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +248,8 @@ func TestJoinFilletLineLine(t *testing.T) {
 	// original edge), the tangent points are the offset endpoints, and the
 	// fillet is a quarter arc of radius 2 about v.
 	prev, next, v := squareCorner()
-	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, Join: JoinFillet})
+	orig := squareContour(t)
+	r, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, Join: JoinFillet}, orig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +278,7 @@ func TestJoinFilletRefusesOversizedRadius(t *testing.T) {
 	prev := line(kernel.P2(0, -2), kernel.P2(10, -2))
 	next := line(kernel.P2(12, 0), kernel.P2(12, 10))
 	v := kernel.P2(10, 0)
-	if _, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, Join: JoinFillet, FilletRadius: 50}); err == nil {
+	if _, err := resolveJoin(prev, next, v, Options{Radius: 2, Direction: Outside, Join: JoinFillet, FilletRadius: 50}, squareContour(t)); err == nil {
 		t.Fatalf("oversized fillet must be an error")
 	}
 }

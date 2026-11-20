@@ -27,7 +27,7 @@ type joinResult struct {
 //
 // A mitre that would extend beyond the mitre limit falls back to a chamfer,
 // so the centre path never shoots off into stock on a sharp corner.
-func resolveJoin(prev, next kernel.Edge2, v kernel.Point2, o Options) (joinResult, error) {
+func resolveJoin(prev, next kernel.Edge2, v kernel.Point2, o Options, orig kernel.Chain2) (joinResult, error) {
 	if tangentAt(prev, next) {
 		// The boundary corner is rounded (or the edges are collinear): the
 		// offset edges already meet tangentially at the shared point.
@@ -39,7 +39,7 @@ func resolveJoin(prev, next kernel.Edge2, v kernel.Point2, o Options) (joinResul
 	case JoinFillet:
 		return filletJoin(prev, next, v, o.filletRadius())
 	default: // JoinMitre
-		m, err := mitrePoint(prev, next, v)
+		m, err := mitrePoint(prev, next, v, o, orig)
 		if err != nil {
 			return joinResult{}, err
 		}
@@ -93,9 +93,9 @@ func tangentAt(prev, next kernel.Edge2) bool {
 }
 
 // mitrePoint returns the intersection of the two offset edges' supporting
-// curves that lies on the join side of both endpoints (beyond prev's end and
-// before next's start), closest to the vertex.
-func mitrePoint(prev, next kernel.Edge2, v kernel.Point2) (kernel.Point2, error) {
+// curves that lies on the tool side of the original contour, closest to the
+// vertex (pickMitre).
+func mitrePoint(prev, next kernel.Edge2, v kernel.Point2, o Options, orig kernel.Chain2) (kernel.Point2, error) {
 	var cands []kernel.Point2
 	switch {
 	case prev.IsLine() && next.IsLine():
@@ -119,27 +119,66 @@ func mitrePoint(prev, next kernel.Edge2, v kernel.Point2) (kernel.Point2, error)
 		a2, _ := next.AsArc()
 		cands = kernel.CircleCircleIntersect(a1.Center, a1.Radius, a2.Center, a2.Radius)
 	}
-	return pickMitre(cands, prev, next, v)
+	return pickMitre(cands, prev, next, v, o, orig)
 }
 
-// pickMitre chooses the candidate on the join side of both edges, closest to
-// the vertex.
-func pickMitre(cands []kernel.Point2, prev, next kernel.Edge2, v kernel.Point2) (kernel.Point2, error) {
+// pickMitre chooses the candidate that lies on the tool side of the original
+// contour — the side the tool centre must stay on (Law 7), exactly the test
+// isReachable applies to the assembled offset. If two candidates qualify
+// (line–circle, circle–circle), the one closest to the vertex wins: the true
+// mitre sits at the corner, while the other intersection is on the far side
+// of the supporting circle.
+func pickMitre(cands []kernel.Point2, prev, next kernel.Edge2, v kernel.Point2, o Options, orig kernel.Chain2) (kernel.Point2, error) {
+	wantInside := o.Direction == Inside
 	best := kernel.Point2{}
 	bestDist := math.Inf(1)
 	found := false
 	for _, p := range cands {
-		if !beyondEnd(prev, p) || !beyondStart(next, p) {
+		if kernel.PointInContour(p, orig) != wantInside {
 			continue
+		}
+		if !mitreReachable(prev, p, true) || !mitreReachable(next, p, false) {
+			continue // degenerate corner: the offset edges cross (feature too narrow)
 		}
 		if d := p.Dist(v); d < bestDist {
 			best, bestDist, found = p, d, true
 		}
 	}
 	if !found {
-		return kernel.Point2{}, fmt.Errorf("comp: no mitre point at corner %v: the offset edges do not meet (degenerate corner)", v)
+		// The offset edges' supporting curves do not meet on the tool side at
+		// a resolvable point: the feature is narrower than the tool. Safe
+		// resolution: refuse the contour (the planner may retry with a smaller
+		// tool) — never guess (Law 7).
+		return kernel.Point2{}, fmt.Errorf("%w: corner %v — the feature is too narrow for this tool radius; use a smaller tool", ErrTooLarge, v)
 	}
 	return best, nil
+}
+
+// mitreReachable reports whether the mitre point p is reachable from e's
+// join-side endpoint without passing through e's other endpoint — i.e. the
+// trim to p is non-degenerate and does not fold back through e. For the
+// previous edge that excludes p at/before the start; for the next edge, p
+// at/beyond the end. On an arc, the complement of the span beyond the far
+// endpoint is a natural continuation (for a line it would be a fold-back),
+// so only the start-side complement is excluded. A candidate failing this
+// makes the corner degenerate: the offset edges cross because the feature
+// is narrower than the tool.
+func mitreReachable(e kernel.Edge2, p kernel.Point2, isPrev bool) bool {
+	const tol = 1e-9
+	if e.IsLine() {
+		f := fracAlongLine(e, p)
+		if isPrev {
+			return f >= tol
+		}
+		return f <= 1-tol
+	}
+	a, _ := e.AsArc()
+	d := arcDelta(e, p)
+	s := a.Sweep()
+	if isPrev {
+		return d >= tol && d <= 2*math.Pi-s+tol
+	}
+	return d <= s-tol || d > s+tol
 }
 
 // fracAlongLine returns the position of p on the line through e as a
@@ -164,29 +203,6 @@ func arcDelta(e kernel.Edge2, p kernel.Point2) float64 {
 		return kernel.NormalizeAngle(a.A0 - theta)
 	}
 	return kernel.NormalizeAngle(theta - a.A0)
-}
-
-// beyondEnd reports whether p is on e's supporting curve on the far side of
-// e's end point (the join side for the previous edge). For a line this is the
-// ray past the end; for an arc it is the complement of the swept span.
-func beyondEnd(e kernel.Edge2, p kernel.Point2) bool {
-	if e.IsLine() {
-		return fracAlongLine(e, p) >= 1-fracTol
-	}
-	a, _ := e.AsArc()
-	return arcDelta(e, p) > a.Sweep()+fracTol
-}
-
-// beyondStart reports whether p is on e's supporting curve on the near side
-// of e's start point (the join side for the next edge). For a line this is
-// the ray before the start; for an arc it is the complement of the swept
-// span (which meets the start at one end).
-func beyondStart(e kernel.Edge2, p kernel.Point2) bool {
-	if e.IsLine() {
-		return fracAlongLine(e, p) <= fracTol
-	}
-	a, _ := e.AsArc()
-	return arcDelta(e, p) > a.Sweep()+fracTol
 }
 
 // onEdge reports whether p lies on the finite edge e.
