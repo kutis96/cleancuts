@@ -714,3 +714,89 @@ that case to be exact, tested, and honest about what it does not do.
 **Related.** ADR-001 (one coordinate system, units once at the boundary),
 ADR-004 (no deps in internal/), ADR-015 (mesh stock behind the same
 surface), ADR-016 (point JSON form), roadmap phase 2 (part import).
+
+## ADR-018 — The part is a recipe over a mesh; feature kind follows nesting parity; the first-cut planner is a thin composition (Accepted)
+
+**Context.** Phase 2's exit criterion is: import a real STL part, plan its 2D
+features, offset with a real tool, apply the correct milling mode, route
+around keep-out volumes, and emit G-code. The geometric pieces now exist and
+are tested: `mesh.Slice(z)` (ADR-017), `stock` (ADR-015), `comp.Offset`
+(ADR-013), `planning.PlanFeature` (ADR-009), `toolpath.Loop`, and
+`safety.CheckPath` (ADR-012). What is missing is (a) the *part* model — what
+to cut and where, (b) the classification of the section loops into features,
+(c) the composition of those pieces into verified per-feature paths with one
+coherent Z model, and (d) the contract the program layer (slice L) will build
+on.
+
+**Decision.**
+
+1. **`Part` is a portable JSON recipe over an in-memory mesh** (Law 6): `id`,
+   `name`, `mesh` (the mesh file — resolved by the CLI; the core never does
+   I/O), `slice_z` (optional; default: midpoint of the two topmost distinct
+   `VertexZs` levels — the documented 2.5D slicing rule, ADR-017), and
+   `cut_z` (optional; default: the part's minimum Z, i.e. a cut through the
+   part). A recipe of just `id` + `mesh` is complete for a prismatic part.
+2. **Feature kind follows nesting parity.** The section loops at `slice_z`
+   nest by containment: a loop's parent is the innermost loop that contains
+   it; outermost loops have no parent. A loop's kind is set by the parity of
+   its nesting depth: **even depth (0, 2, …) is a material contour**
+   (`planning.Profile`: kept material inside, tool outside, `comp.Outside`),
+   **odd depth (1, 3, …) is a void contour** (`planning.Pocket`: kept material
+   outside, tool inside, `comp.Inside`). One rule covers profiles, holes, and
+   islands uniformly, and it agrees with the ADR-009 climb predicate (both
+   kinds mill in the requested mode with the matching traversal direction).
+   Loops whose edges intersect are refused: the section of a valid solid is a
+   disjoint, nested set, and overlapping loops make the kept material
+   ambiguous — milling both would over-cut (Law 7).
+3. **The first-cut planner is a thin composition.** `planner.Plan` maps
+   `part + mesh + stock + fixture + tool + machine + process` to an ordered,
+   verified list of paths, and per feature runs exactly: `comp.Offset`
+   (direction by kind) → per chain `planning.PlanFeature` (mode + entry) →
+   `toolpath.Loop` → `safety.CheckPath`. The planner re-derives no geometry:
+   it owns the Z model, the feature order, and process validation, and
+   delegates every geometric decision to its tested module (ADR-008).
+4. **The Z model (v1, single-depth).** The cut is at `cut_z` (default: part
+   bottom); the tool's flute covers the depth — checked against
+   `flute_length` when specified (a short flute would leave the top of the
+   wall uncut: a precise refusal, not a guess). Rapids are at
+   `safe_z = stock top + safe_clearance` (default 5 mm). The plunge column —
+   the entry XY through `[cut_z, safe_z]` — must clear every keep-out active
+   anywhere in that range: `planning` gains `PickStartBetween(zLo, zHi)`
+   (Law 7 at the entry: a clamp floating above the cutting plane is a real
+   collision, and the old single-height check missed it). Linking rapids
+   between features are a **program-layer** concern (slice L: `moves.Program`
+   materializes them and verifies them with `safety`); every planner path is
+   self-contained (plunge → cutting loop → retract) and verified on its own.
+5. **Process values are explicit, checked, and refused — not clamped.**
+   Feed, spindle, mode, and coolant are planner inputs (the resolved process;
+   the CLI resolves them from the tool crib and flags). Feed must lie in the
+   machine's `[min_feed, max_feed]`, and spindle must not exceed
+   `spindle_max_rpm` or the tool's `max_rpm` (where non-zero): out of range is
+   a precise refusal. Feed clamping/scheduling is phase 4 (ADR-010) and will
+   replace these checks with the scheduler, not contradict them.
+6. **A fully unreachable feature is a hard refusal; a partial drop is a
+   diagnostic.** If `comp.Offset` drops a feature entirely (tool too large),
+   `Plan` refuses, naming the feature, the tool, and the radius — the part
+cannot be made with this tool. If it drops part of a feature (a narrow
+corner), the remaining chains are milled and the drop is surfaced as a
+diagnostic: residual material is the safe side (ADR-013).
+
+**Consequences.**
+
+- The part contract is small and stable: a recipe over a mesh plus two Z
+  values with documented defaults. Multi-depth roughing (phase 3) is added as
+  a pass structure over the same features — the part/feature contract does
+  not change.
+- Islands (depth-2 material contours) work in v1 with zero special-casing,
+  and the parity rule extends to any nesting depth, so the 3D era does not
+  invalidate it.
+- `planner` is the one package that fans in over the pipeline; it is small,
+  stateless, and its output is a value (`Result`) that both the program layer
+  (slice L) and the future GUI can consume.
+- The entry-safety fix (plunge column vs. keep-out Z range) closes a real
+  gap in the ADR-012 gate: a clamp floating above the cutting plane no longer
+  survives a plunge through it.
+
+**Related.** ADR-008 (composable stages), ADR-009 (climb predicate),
+ADR-012 (keep-outs), ADR-013 (comp), ADR-015 (stock), ADR-017 (mesh/Slice),
+roadmap phase 2 (operation planner, first cut).
