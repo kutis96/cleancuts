@@ -174,6 +174,11 @@ func Plan(p Params) (Result, error) {
 	if coolant == "" {
 		coolant = moves.CoolantOff
 	}
+	switch coolant {
+	case moves.CoolantOff, moves.CoolantFlood, moves.CoolantMist, moves.CoolantThrough:
+	default:
+		return Result{}, fmt.Errorf("planner: unknown coolant %q (want off, flood, mist, or through)", coolant)
+	}
 	if p.SafeClearance < 0 {
 		return Result{}, fmt.Errorf("planner: safe clearance must be >= 0 (got %g)", p.SafeClearance)
 	}

@@ -442,6 +442,7 @@ func TestPlanProcessRefusals(t *testing.T) {
 		{"feed above machine maximum", func(p *Params) { p.Feed = 6000 }, "maximum 5000"},
 		{"spindle above tool max", func(p *Params) { p.Spindle = 13000 }, "endmill-10mm-4f"},
 		{"spindle above machine max", func(p *Params) { p.Spindle = 16000 }, "mill-1"},
+		{"unknown coolant", func(p *Params) { p.Coolant = moves.Coolant("turbo") }, "unknown coolant"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
