@@ -119,6 +119,14 @@ via `Emit`) into dialect-neutral G-code:
 
 - **One header:** spindle = the max across all paths (`S…`, `M3`), coolant on
   if any path wants it (`M8`).
+- **Program start (ADR-020):** before the first move, a rapid to that move's
+  `From` (skipped when `From == To`). The machine's position at program start
+  is the operator's responsibility; producers set a plunge's `From` to the
+  entry point at safe Z, so this is a safe-Z pre-positioning — the plunge then
+  descends *vertically* instead of diagonally over the part or a clamp.
+  Program start is *framing* (like the header/footer), so it lives in the
+  emitter and benefits every producer (planner, `demo`, hand-edited programs);
+  the `moves` format is unchanged.
 - **The paths in order**, each under a `; name` comment; a link path emits like
   any other (its moves are just moves).
 - Each move → `G0`/`G1`/`G2`/`G3` with `X Y Z`, `F`, and (arcs) `I J` (centre

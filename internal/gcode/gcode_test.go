@@ -165,10 +165,57 @@ func TestEmitProgram(t *testing.T) {
 		t.Errorf("footer order must be M9, M5, M2 (at %d, %d, %d)\n%s", iM9, iM5, iM2, out)
 	}
 	// Paths emit in order: a's first cutting move before the link, the link
-	// before b's.
-	iA, iLink, iB := strings.Index(out, "G1 X10 Y0 Z-10 F600"), strings.Index(out, "G0 X0 Y0 Z5"), strings.Index(out, "; second feature")
+	// before b's. (Anchor the link on its travel comment — the program-start
+	// pre-positioning shares the link's coordinates, ADR-020.)
+	iA, iLink, iB := strings.Index(out, "G1 X10 Y0 Z-10 F600"), strings.Index(out, "; travel a → q"), strings.Index(out, "; second feature")
 	if !(iA < iLink && iLink < iB) {
 		t.Errorf("paths must emit in order (at %d, %d, %d)\n%s", iA, iLink, iB, out)
+	}
+}
+
+// TestEmitProgramStartPrePositions pins ADR-020: before the first move the
+// emitter rapids to that move's From (the safe-Z entry point), so the plunge
+// descends vertically instead of diagonally over the part.
+func TestEmitProgramStartPrePositions(t *testing.T) {
+	p := moves.Path{
+		ID: "p", Operation: "profile", ToolID: "t1",
+		Moves: []moves.Move{
+			{Kind: moves.KindRapid, From: kernel.P3(65, -5, 25), To: kernel.P3(65, -5, 0), Comment: "plunge"},
+			{Kind: moves.KindLinear, From: kernel.P3(65, -5, 0), To: kernel.P3(30, -5, 0), Feed: 500},
+		},
+	}
+	prog := moves.Program{ID: "prog", Paths: []moves.Path{p}}
+	out, err := EmitProgram(prog, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	iPre := strings.Index(out, "G0 X65 Y-5 Z25")   // the pre-positioning
+	iPlunge := strings.Index(out, "G0 X65 Y-5 Z0") // the plunge
+	if iPre < 0 {
+		t.Fatalf("missing the safe-Z pre-positioning:\n%s", out)
+	}
+	if !(iPre < iPlunge) {
+		t.Fatalf("pre-positioning (%d) must come before the plunge (%d):\n%s", iPre, iPlunge, out)
+	}
+}
+
+// TestEmitProgramStartSkipsZeroLength pins the skip: a zero-length first move
+// (a pure positioning) is not doubled up.
+func TestEmitProgramStartSkipsZeroLength(t *testing.T) {
+	p := moves.Path{
+		ID: "p", Operation: "profile", ToolID: "t1",
+		Moves: []moves.Move{
+			{Kind: moves.KindRapid, From: kernel.P3(65, -5, 25), To: kernel.P3(65, -5, 25), Comment: "position"},
+			{Kind: moves.KindRapid, From: kernel.P3(65, -5, 25), To: kernel.P3(65, -5, 0), Comment: "plunge"},
+		},
+	}
+	prog := moves.Program{ID: "prog", Paths: []moves.Path{p}}
+	out, err := EmitProgram(prog, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out, "G0 X65 Y-5 Z25"); n != 1 {
+		t.Fatalf("expected 1 safe-Z positioning, got %d:\n%s", n, out)
 	}
 }
 

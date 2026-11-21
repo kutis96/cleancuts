@@ -117,6 +117,18 @@ func EmitProgram(p moves.Program, o Options) (string, error) {
 		w.line(fmt.Sprintf("M%d", o.CoolantOn))
 	}
 
+	// Program start (ADR-020): the machine's position at program start is the
+	// operator's responsibility. Pre-position to the first move's From — the
+	// producer sets a plunge's From to the entry point at safe Z — so the
+	// plunge then descends vertically instead of diagonally over the part or
+	// a clamp. Program start is framing (like the header/footer), so it lives
+	// here, in the emitter, and benefits every producer; the moves format is
+	// unchanged. Skipped when the first move is a zero-length positioning.
+	if first := p.Paths[0].Moves[0]; !first.From.Eq(first.To, kernel.AbsTol) {
+		w.comment("program start — safe-Z pre-position")
+		w.line(fmt.Sprintf("G0 %s", w.coordsPt(first.From)))
+	}
+
 	for _, path := range p.Paths {
 		w.comment(path.Name)
 		for _, m := range path.Moves {
@@ -188,7 +200,13 @@ func writeMove(w *writer, m moves.Move) error {
 }
 
 func (w *writer) coords(m moves.Move) string {
-	return fmt.Sprintf("X%s Y%s Z%s", w.fmt(m.To.X), w.fmt(m.To.Y), w.fmt(m.To.Z))
+	return w.coordsPt(m.To)
+}
+
+// coordsPt renders a point at the configured coordinate precision (shared by
+// the per-move coordinates and the program-start pre-positioning, ADR-020).
+func (w *writer) coordsPt(p kernel.Point3) string {
+	return fmt.Sprintf("X%s Y%s Z%s", w.fmt(p.X), w.fmt(p.Y), w.fmt(p.Z))
 }
 
 // fmt renders a coordinate at the configured precision, trimming trailing

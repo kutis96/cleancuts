@@ -864,3 +864,218 @@ keep-outs, and what the CLI surface looks like.
 **Related.** ADR-003 (the seam), ADR-007 (config is data), ADR-012
 (keep-outs), ADR-014 (program primitives), ADR-018 §4 (linking rapids are
 the program layer's job), roadmap phase 2 (CLI generate, slice L).
+
+---
+
+## ADR-020 — Program start: the emitter pre-positions at safe Z before the first move (Accepted)
+
+**Context.** A program's first move is a plunge (a vertical move from safe Z
+to cut Z at the entry point). But the machine's position at program start is
+*unknown* — the operator homed it, the core does not model home. The current
+emitter just emits the plunge, so the machine rapids diagonally from wherever
+it is (possibly over the part or a clamp) straight down to cut depth. That is
+exactly the "ramping in over the part" failure the user observed. The fix
+must benefit every producer (the planner, the `demo` command, and a user-edited
+`.moves.json`) in one place.
+
+**Decision.** The machine position at program start is the operator's
+responsibility, and the emitter makes the first move safe: **before emitting
+the first move of a program, the emitter emits a rapid to that move's
+`From`** (skipped when `From == To`). Producers set a plunge's `From` to the
+entry point at safe Z, so this pre-positioning is a safe-Z move; the plunge
+then descends vertically. This is program *framing* (like the header and
+footer), so it lives in the emitter, not in each producer, and the `moves`
+format is unchanged. The producer contract — *the first move of the first
+path is a plunge whose `From` is at safe Z* — is documented in gcode.md.
+
+**Consequences.**
+
+- One place owns program start; the planner, `demo`, and hand-edited programs
+  all get the safe pre-positioning automatically.
+- The intermediate format stays minimal (no synthetic move added); the
+  pre-positioning is a rendering concern, consistent with ADR-002's
+  "formatting is post-processing" stance.
+- A GUI replaying `moves` applies the same rule (rapid to the first move's
+  `From` first) so the preview matches the emitted G-code.
+
+**Related.** ADR-002 (post-processing concerns), ADR-019 (program framing),
+ADR-010 (safety), gcode.md (emission model).
+
+---
+
+## ADR-021 — Feature kind follows the region's material Z, not just nesting parity (Supersedes part of ADR-018 §2)
+
+**Context.** ADR-018 classifies a section loop by nesting-parity: even depth
+is a material contour (profile), odd depth a void (pocket). That is wrong for
+a *raised boss*: a cylinder standing on a base, sectioned at the base's top,
+yields the base square (depth 0) and the cylinder's circle (depth 1). Parity
+calls the circle a *pocket to cut* — but it is *kept material* (the cylinder
+rises above the slice plane). Milling it would destroy the part. The correct
+signal is the **Z relationship between the region's material and the slice
+plane**: a region with material *above* the slice plane is a boss (kept); a
+region with no material above it is a void (cuttable). Parity is a special
+case of this rule (a through-hole has no material above, so it is a void).
+
+**Decision.** `part.Detect` classifies each section loop as:
+
+- **Profile** — the outermost loop (depth 0): the part's boundary, milled on
+  the outside.
+- **Boss** — a nested loop (depth > 0) whose region has material *above* the
+  slice plane (region top Z > slice Z). It is **kept**; it is never milled and
+  is a hard obstacle (keep-out) within its parent pocket region.
+- **Pocket** — a nested loop (depth > 0) with no material above the slice
+  plane. It is a void: cuttable in profile mode, or part of the cleared
+  region in pocket mode.
+
+The "material above the slice plane" test is the new pure primitive
+`mesh.RegionTopZ(outer, inners) (topZ, has, err)`: the highest material Z
+within the region (outer minus the inners), over the mesh triangles whose
+centroid lies in the region. `has` is false when the region is a void. A
+region is a boss iff `has && topZ > sliceZ + tol`.
+
+**Consequences.**
+
+- The cylinder-on-base is classified correctly: square = Profile, circle =
+  Boss. The planner never mills the boss; it clears *around* it.
+- ADR-018's parity rule is preserved as the special case (a through-hole has
+  no material above the slice plane → Pocket), so the plate example is
+  unchanged.
+- `planning.FeatureKind` gains `Boss`; the planner treats a boss as a keep-out
+  obstacle, not a feature to cut (Law 7: never over-cut).
+
+**Related.** ADR-018 (refined), ADR-012 (keep-outs), ADR-017 (mesh boundary),
+`mesh.RegionTopZ`, part.md (the part model).
+
+---
+
+## ADR-022 — Pocket clearing: a region, clipped rows, constant engagement, constant chip-load feed (Accepted)
+
+**Context.** "Mill out all that isn't the cylinder on the top layer" is an
+*area* operation: remove the material in a **region** (the base square minus
+the cylinder) down to a depth. The existing `toolpath.Loop` only mills a
+*contour*. Phase 3 adds the area operation with the friend's
+"trochoidal / adaptive / constant chip-load / constant engagement" requests
+made concrete and testable (operations.md, tool-parameters.md).
+
+**Decision.** A **pocket** is a region cleared down to `cut_z`:
+
+- **The region** is `outer` (the Profile boundary) minus the `bosses` (the
+  kept loops, ADR-021). Void loops are part of the cleared region. The tool
+  centre must stay inside `outer` and outside every boss.
+- **The path** is a **serpentine (trochoidal) raster**: rows at a constant
+  *stepover* `s`, clipped to the region, traversed in alternating directions,
+  joined by **semicircular end arcs** of radius `s/2` (the trochoidal
+  element — arcs, not polyline corners, so the path is smooth by
+  construction, ADR-002).
+- **Clipping** is analytic: a row (a straight line) is intersected with the
+  outer loop and with each boss (kernel `LineLineIntersect` /
+  `LineArcIntersect`), the x-extents are collected as intervals, and the
+  clearable intervals are *outer minus bosses* (interval subtraction). No
+  tessellation, no general polygon booleans.
+- **Constant engagement:** the radial engagement of a row at stepover `s` is
+  the exact lens width `a_e = R − sqrt(R² − (s/2)²)` (≈ s²/2R for small s).
+  A constant stepover gives a constant `a_e` — the "constant cutter
+  engagement" request.
+- **Constant chip-load feed:** each cutting move's feed is
+  `F(a_e) = F_full · sqrt(a_e / D)` (the tool-parameters.md model, D = 2R).
+  The geometry module emits the path *and* the per-move `a_e` (in the move's
+  metadata); the feed is derived from it. Both halves are independently
+  tested.
+- **Safety:** the whole path is run through `safety.CheckPath` against the
+  bosses (as keep-outs) and the fixture keep-outs. A boss the tool would
+  touch is a refusal, not a collision.
+
+**Consequences.**
+
+- The cylinder-on-base mills: the annulus is cleared, the cylinder is kept,
+  the outer square is the limit — with constant engagement and chip-load.
+- The engagement and feed models are pure, tested functions (the
+  "testable pieces of math" principle), separate from the path geometry.
+- A straight-row raster with arc ends is the v1 trochoid; a true epi/hypo-
+  cycloid is a refinement that reuses the same engagement + feed model.
+
+**Related.** ADR-021 (the region), ADR-013 (comp/safety), ADR-002 (arcs),
+operations.md (the strategies), tool-parameters.md (the feed model).
+
+---
+
+## ADR-023 — Lead-in / lead-out is a user-definable entry segment, safely bounded (Accepted)
+
+**Context.** The friend wants "a user-definable lead-in on the entry to the
+cutting paths, so the cutter can start at a specified XY coordinate outside
+the actual area to be cut. (If the lead-in isn't specified, pick a safe
+default.)" A lead-in lets the tool enter at full speed and build chip load
+gradually, instead of starting the cut dead-on at the first corner.
+
+**Decision.** A **lead-in** is an extra entry segment before the first
+cutting move, on the *material-removal side* of the entry edge (so it never
+cuts kept material). It is a per-part setting (portable JSON, the part
+recipe) with a CLI override:
+
+- **Kind:** `straight` (extend the entry edge's line backward by the length
+  — the friend's "start at a specified XY outside the area") or `tangent`
+  (an arc tangent to the entry edge, bulging onto the removal side).
+- **Length:** the lead-in length in mm.
+- **Default (unspecified):** a **tangent** lead-in of length
+  `min(tool radius, 3 mm)` — short enough to be safe in a tight feature,
+  long enough to smooth the entry.
+- **Safe fallback:** the lead-in is checked against the other loops (kept
+  material and other voids). If the requested kind/length does not fit, it
+  degrades `tangent → straight → none`, and a diagnostic is recorded. It
+  never over-cuts (Law 7); the safe outcome is a shorter or absent lead-in,
+  said so.
+
+The lead-in is a *generation* concern (it changes the tool-centre path
+before the first edge), so it is applied in the toolpath layer, driven by a
+planning parameter. It is a cutting move (it carries the milling mode and
+feed), not a rapid.
+
+**Consequences.**
+
+- The entry is visible and overridable in the recipe and the intermediate
+  format (ADR-003/005), and the safe default means a part with no lead-in set
+  still gets a smooth, safe entry.
+- The fallback chain is a safe-side degradation with a diagnostic, consistent
+  with ADR-013's "residual + report" philosophy.
+
+**Related.** ADR-003 (decisions are data), ADR-005 (milling mode), ADR-013
+(safe degradation), part.md (the recipe), toolpath (application).
+
+---
+
+## ADR-024 — Stock is optional (a virtual bounding-box default) and feed/speed resolve from the tool's feeds[] (Accepted)
+
+**Context.** Two requests. (1) "It would be nice to be able to run without
+specifying the stock (especially for quick test runs)." Today `--stock` is
+required. (2) ADR-019 §5 left feed/spindle as explicit CLI values; the
+roadmap's Phase 3 resolves them from the tool's `feeds[]` (the
+ProcessTable, tool-parameters.md).
+
+**Decision.**
+
+- **Optional stock:** when no stock is given, the planner uses a **virtual
+  stock = the part's bounding box expanded by a 5 mm margin in XY** (Z from
+  the part's min to max Z). This keeps the safety machinery intact (the fit
+  gate is trivially satisfied, `safe_z` = part max Z + clearance, the Z-floor
+  is the part min Z) while removing the stock file from a quick run. The
+  virtual stock is a *convenience default*, not a claim about the real
+  billet; a real stock file still overrides it and is required for
+  production runs where the stock top/footprint matters. The planner says in
+  its summary when the virtual stock is in effect.
+- **Feed/speed resolution:** the planner resolves the cutting feed and
+  spindle from the tool's `feeds[]` for the workpiece material, using the
+  tool-parameters.md model (`n = vc·1000/(π·D)`, `F = n·flutes·fz`, clamped
+  to `n ≤ max_rpm` and the machine's feed/spindle limits). An explicit CLI
+  `--feed` / `--spindle` overrides the resolved values. When neither a CLI
+  value nor a matching `feeds[]` entry exists, the planner **refuses** with a
+  precise message (the safe failure is no program, not a guessed feed).
+
+**Consequences.**
+
+- A quick test run is `cleancuts generate --part … --tool … --machine …`
+  (no `--stock`, no `--feed`/`--spindle` when the tool has `feeds[]`).
+- Feed/speed become *visible, overridable, material-aware* (ADR-003/005) and
+  the "refuse, don't clamp" stance (ADR-018 §5) is preserved.
+
+**Related.** ADR-007 (config is data), ADR-018 §5 (refuse not clamp),
+ADR-019 §5 (the CLI), tool-parameters.md (the feed model).
