@@ -1,6 +1,6 @@
 # 001: PointInContour undercounts parity when a ray hits one arc edge twice
 
-- **Status:** open
+- **Status:** closed
 - **Type:** bug
 - **Priority:** high
 - **Found:** 2026-11-21 (independent code review; confirmed by execution in a sandbox copy outside the repo)
@@ -61,6 +61,33 @@ Then add a regression test in `contain2_test.go` for the lens region (either cas
 
 ## Resolution
 
-(open — when closing, document here: which file(s)/function(s) changed,
-what and why, how it was verified, and date + commit. The record must
-stand on its own without reading the commit.)
+Fixed in `internal/kernel/contain2.go`:
+
+- `rayCrossesArc` (returned one `bool` per edge) was replaced by
+  `rayArcCrossings`, which counts **per hit point**: each distinct root
+  `t` of the ray–circle quadratic that lands on the arc's swept span is
+  one crossing. A ray meeting a >180° arc at two points now contributes
+  2 (even), restoring correct parity. At tangency the two roots
+  coincide and both count — 2 is even, so a touch flips nothing
+  (algebraic multiplicity, the standard even-odd convention).
+- `PointInContour` now does `crossings += rayArcCrossings(...)` and its
+  doc comment states the per-hit counting rule (per the acceptance
+  criteria).
+
+No other files needed changes: `stock.inFootprint`/`Fits`,
+`comp/join.go` `mitreAcceptable`, `comp/offset_assemble.go`, and
+`part.Detect` all call `PointInContour` and inherit the fix.
+
+Verified:
+
+- New regression test `TestPointInContourArcDoubleHit` in
+  `internal/kernel/contain2_test.go`: unit circle as a 220°+140° arc
+  pair and as two 180° arcs (the `stock.SectionAt` cylinder shape);
+  outside points in the lens region (|p| = 1.93 and 1.64, both > 1)
+  report outside, inside points report inside.
+- Confirmed the test **fails against the pre-fix code** (both lens
+  cases reported inside) and passes after — a true regression pin.
+- Full suite: `sh scripts/ci.sh` → gofmt, vet, test, build all pass
+  (2026-11-21).
+
+Date: 2026-11-21 · Commit: (this commit).

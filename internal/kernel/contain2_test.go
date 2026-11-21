@@ -75,6 +75,62 @@ func TestPointInContourCircle(t *testing.T) {
 	}
 }
 
+// circleArcs splits the unit circle (centre, r) into two CCW arcs of the
+// given spans — the >180° case issue 001 is about.
+func circleArcs(center Point2, r, span1 float64) (Chain2, error) {
+	mk := func(a0, a1 float64) (Edge2, error) {
+		return NewArcEdge(center,
+			P2(center.X+r*math.Cos(a0), center.Y+r*math.Sin(a0)),
+			P2(center.X+r*math.Cos(a1), center.Y+r*math.Sin(a1)),
+			false)
+	}
+	e1, err := mk(0, span1)
+	if err != nil {
+		return Chain2{}, err
+	}
+	e2, err := mk(span1, 2*math.Pi)
+	if err != nil {
+		return Chain2{}, err
+	}
+	return NewChain2([]Edge2{e1, e2})
+}
+
+// TestPointInContourArcDoubleHit pins issue 001: a ray that meets the same
+// >180° arc at two distinct points must count as two crossings. The points
+// are provably outside (distance > 1 from the origin) yet sat in the "lens"
+// beyond an arc's bulge, where the old per-edge bool undercounted parity
+// and reported inside.
+func TestPointInContourArcDoubleHit(t *testing.T) {
+	c220, err := circleArcs(P2(0, 0), 1, 220*math.Pi/180)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c180, err := circleArcs(P2(0, 0), 1, math.Pi) // two half-arcs: stock cylinder shape
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		c    Chain2
+		p    Point2
+		want bool
+	}{
+		{"220+140 split, outside in lens", c220, P2(-1.866, -0.5), false},
+		{"two 180 arcs, outside in lens", c180, P2(-1.632, 0.143), false},
+		{"220+140 split, centre still inside", c220, P2(0, 0), true},
+		{"two 180 arcs, centre still inside", c180, P2(0, 0), true},
+		{"two 180 arcs, inside off-axis", c180, P2(-0.5, 0.1), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PointInContour(tc.p, tc.c); got != tc.want {
+				r := tc.p.Dist(P2(0, 0))
+				t.Fatalf("PointInContour(%v) = %v, want %v (|p| = %g)", tc.p, got, tc.want, r)
+			}
+		})
+	}
+}
+
 func TestPointInContourUShapedNotch(t *testing.T) {
 	// A 10x10 rectangle with a 4x6 notch cut from the top (x in [3,7],
 	// y in [4,10]). CCW.
