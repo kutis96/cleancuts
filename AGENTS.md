@@ -49,6 +49,20 @@ version. For each slice:
 A design decision is "done" when it is in an ADR + the relevant doc, even before
 the code exists. Implementation follows and is verified by tests.
 
+## Issues (bugs, doc drift, tracked TODOs)
+
+Known issues live in `issues/`: open items in `issues/open/`, resolved ones in
+`issues/closed/` (kept for the record — never delete). Conventions and the file
+template are in `issues/README.md`.
+
+- **At the start of a session:** read every file in `issues/open/` before
+  starting work. If an issue overlaps your task, work on it, or say explicitly
+  why you're deferring it.
+- **New issues:** bugs you discover and doc drift get the next free number
+  (across both folders) and a file in `issues/open/`.
+- **Closing:** when you fix an issue, move the file to `issues/closed/`, set
+  Status to `closed`, and note the date + commit in Resolution.
+
 ## Version control (git) — commit as you go
 
 This is a git repository (`github.com/kutis96/cleancuts`). Treat commits as
@@ -137,6 +151,7 @@ that cover it.
 - **Plan & current status:** `docs/roadmap.md`.
 - **JSON contracts:** `schemas/`.
 - **Examples:** `examples/`.
+- **Issues & known bugs:** `issues/` (open in `issues/open/`, resolved in `issues/closed/`).
 
 ## Definition of done (current phase)
 
