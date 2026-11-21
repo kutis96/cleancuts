@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/kutis96/cleancuts/schemas/part.schema.json",
+  "title": "CleanCuts part recipe",
+  "description": "A portable recipe over a mesh: what to cut and where (ADR-018). The mesh file holds the part geometry (STL or 3MF, canonical WCS, mm); slice_z and cut_z default to the documented 2.5D values (midpoint of the top two vertex heights; the part's minimum Z). See docs/part.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "mesh"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "Stable part identifier (errors name it)." },
+    "name": { "type": "string", "description": "Human-readable name (used in paths and messages)." },
+    "mesh": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The geometry file (STL ASCII/binary or 3MF) in the canonical WCS (mm). Resolved by the CLI; the core never reads files."
+    },
+    "slice_z": {
+      "type": "number",
+      "description": "Height at which the 2.5D section is taken. Must lie strictly between two adjacent vertex heights (the 2.5D rule, ADR-017). Omit for the default: midpoint of the two topmost vertex heights."
+    },
+    "cut_z": {
+      "type": "number",
+      "description": "Tool-tip height of the cut. Must be strictly below slice_z and at or above the stock bottom. Omit for the default: the part's minimum Z (a cut through the part)."
+    }
+  }
+}
