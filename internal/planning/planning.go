@@ -43,14 +43,22 @@ const (
 	// Pocket: the kept material is OUTSIDE the contour; the tool runs
 	// inside it (the contour bounds a pocket wall).
 	Pocket
+	// Boss: a kept obstacle within a pocket — the contour's material rises
+	// above the section plane (ADR-021). It is never milled; the tool must
+	// stay outside it (a hard keep-out).
+	Boss
 )
 
 // String returns a human-readable name for logs and errors.
 func (k FeatureKind) String() string {
-	if k == Pocket {
+	switch k {
+	case Pocket:
 		return "pocket"
+	case Boss:
+		return "boss"
+	default:
+		return "profile"
 	}
-	return "profile"
 }
 
 // KeepOut is a workholding zone the tool centre must never enter (a vise

@@ -1079,3 +1079,142 @@ ProcessTable, tool-parameters.md).
 
 **Related.** ADR-007 (config is data), ADR-018 §5 (refuse not clamp),
 ADR-019 §5 (the CLI), tool-parameters.md (the feed model).
+
+---
+
+## ADR-025 — Face sections: a slice on a face height selects that face's boundary (Refines ADR-017 §5, ADR-018 §2)
+
+**Context.** ADR-017 makes `Slice(z)` exact for the *clean case* — a plane
+strictly between vertex heights — and refuses coplanar planes with a precise
+error. That defers the *face section* (a plane coinciding with a face), which
+is exactly the section a pocket needs: the Testmesh (a Ø25 cylinder on a
+50×50 base) has vertex heights −20, −10, 0; the band sections are the square
+only (z∈(−20,−10)) and the Ø25 circle only (z∈(−10,0)). The section that
+sees *both* loops — the base-top face at z=−10 (a square with the circle as a
+hole) — is coplanar, and therefore refused today. "Mill out everything on the
+base top except the cylinder" (the friend's part) is unexpressible without it.
+The concept is coherent: the section at height h is the boundary of
+(plane h ∩ solid) — for a band height that is the cross-section boundary
+(what `Slice` returns); for a face height it is the boundary of the face
+itself. ADR-017 deferred the *general* coplanar case (arbitrary polygon
+unions); the **prismatic** case (vertical walls — boxes, prisms, cylinders,
+the common 2.5D parts) needs no boolean engine: the face's boundary is the
+set of its edges that belong to exactly one face triangle.
+
+**Decision.** `mesh` gains a second, sibling section primitive:
+
+- **`FaceLoops(h) ([]Chain2, error)`** — the boundary loops of the union of
+  the solid's **upward-facing horizontal faces at height h**. A face triangle
+  is a triangle whose three vertices all lie at z=h (within `AbsTol`) and
+  whose normal points +Z (a horizontal triangle's normal is exactly ±Z, so
+  the test is exact). The face boundary is extracted by **edge pairing**:
+  an undirected edge (exact float key, as in `Slice`) that belongs to
+  exactly one face triangle is a boundary edge; each boundary vertex joins
+  exactly two boundary edges and the edges stitch into closed loops. A
+  vertex joining a different number of boundary edges, or a dangling
+  boundary edge, is a **precise refusal** (non-manifold face complex — the
+  ADR-017 stance: never extract wrong). The result loops are in the mesh's
+  own winding (consumers measure `SignedArea`; never assume).
+- **Dispatch lives in `part`:** `slice_z` strictly between adjacent vertex
+  heights → band section (`Slice`, unchanged); on a vertex height → face
+  section (`FaceLoops`). `EffectiveSliceZ` accepts a vertex height now
+  (it still refuses a height outside the part's Z range). The midpoint
+  default rule is unchanged.
+- **Downward-facing-only heights are refused:** a height where the solid has
+  no upward-facing face (e.g. the Testmesh bottom, z=−20) yields an empty
+  face set → a precise error naming the height and the vertex levels.
+
+**Consequences.**
+
+- The Testmesh section at z=−10 is {50×50 square, Ø25 289-gon}; the circle
+  classifies as a **Boss** (ADR-021: material rises above the section) and
+  the annulus is the clearable region (ADR-022) — the friend's part becomes
+  millable.
+- `Slice` and its ADR-017 contract are untouched; the two primitives sit
+  side by side (`band` vs. `face`), and the general coplanar case (sloped
+  faces, T-junctions at the face, non-manifold input) is still the
+  documented refusal — not a silent v1 behaviour.
+- Face sections are pure, testable, and exact for clean meshes (Law 4, Law 5,
+  Law 7): no new dependencies, no resampling, safe failure by refusal.
+- A face section with a *single* loop (the Testmesh top, z=0 → the Ø25
+  circle) is a valid section: profile mode mills it as a contour; pocket
+  mode clears it (a facing operation — see operations.md).
+
+**Related.** ADR-017 (refined — the coplanar deferral now has a prismatic
+case), ADR-018 §2 (the section model), ADR-021 (the classification that
+consumes it), mesh.md (the primitive's spec), part.md (the dispatch rule).
+
+---
+
+## ADR-026 — Pocket traversal: rows, disjoint intervals, lifts, and the row-join arc (Refines ADR-022)
+
+**Context.** ADR-022 decides the pocket is a serpentine raster of rows at
+stepover `s`, clipped to the region, with "semicircular end arcs of radius
+`s/2`". Two refinements fall out of implementing it against real regions
+(clipped rows have different extents; a boss can split a row into two
+disjoint intervals):
+
+1. A semicircle of radius `s/2` fits a join only when the chord between
+   row i's end and row i+1's start is exactly `s` — i.e. only when the two
+   rows have identical extents. Clipped rows do not.
+2. A boss (kept material) in the middle of a row leaves two disjoint
+   clearable intervals; the gap between them is *over kept material* (or
+   outside the region), so no cutting move may bridge it.
+
+**Decision.** The pocket path (one per region — the depth-0 loop minus its
+bosses) is built as:
+
+- **Rows:** horizontal lines at `y = yMin + s/2 + i·s` across the offset
+  region's bounding box. A row's **clearable intervals** are
+  (row ∩ offsetOuter) − (row ∩ ⋃ offsetBoss), as sorted disjoint intervals
+  (analytic line/edge intersection + interval subtraction — ADR-022).
+  Intervals shorter than a sliver threshold (0.1 mm) are dropped with a
+  diagnostic (residual material — the safe side, ADR-013).
+- **Traversal:** rows are visited bottom to top; row *i* is traversed
+  left→right for even *i*, right→left for odd *i* (the classic serpentine).
+  A row with several intervals traverses them in that direction's order,
+  with a **lift** between consecutive intervals of the same row (retract to
+  SafeZ, rapid across, plunge at the next interval's start) — the gap is
+  never cut through (Law 7).
+- **Row join:** between row *i*'s last interval end P₁ and row *i+1*'s
+  first interval start P₂ (when they are on the same side of the region —
+  i.e. the previous end and the next start are the *nearest* interval ends),
+  the join is a **semicircle with diameter P₁P₂** (radius |P₁P₂|/2 — this
+  reduces to `s/2` when the two rows have equal extent, ADR-022's original
+  form). Of the two semicircles on P₁P₂, the one whose centre lies inside
+  the offset region is preferred; the chosen arc is gate-checked (no
+  intersection with any boss loop, clearance ≥ tool radius — the `safety`
+  loop-clearance helpers). If no join arc passes the gate, the join
+  degrades to a **lift** (the safe fallback, with a diagnostic).
+- **Plunges:** every interval that starts after a lift (and the first
+  interval of the path) begins with a vertical rapid plunge at its start
+  (SafeZ → CutZ). The first move of the whole path is such a plunge — the
+  ADR-020 producer contract (the emitter pre-positions there). A pocket
+  entry point always sits over the face (air above it, by the face-section
+  property), never over a boss (intervals are clipped outside the boss
+  offset) — so every plunge is a plunge into the cut face, never into kept
+  material.
+- **Engagement & feed (unchanged from ADR-022, now fully specified):**
+  `a_e = R − √(R² − (s/2)²)` for every cutting move (rows and joins); the
+  cutting feed is `F · √(a_e/D)` (underfeeding the joins — the safe side).
+  Both are pure functions in `toolpath`, independently tested.
+
+**Consequences.**
+
+- The Testmesh annulus (one boss splitting the middle rows into two
+  intervals) yields one coherent path: a serpentine that lifts across the
+  boss where the boss is present and joins with arcs where the region is
+  open — smooth (arcs, ADR-002), safe (gate-checked, Law 7), and fully
+  analytic.
+- "Facing" needs no separate operation: facing a face is a pocket of a face
+  region with no bosses (the Testmesh top at z=0 is exactly that).
+- The planner's per-feature composition (ADR-018 §3) gains one branch:
+  `operation: pocket` maps a depth-0 feature to
+  `comp.Offset(outer, inside, R)` + `comp.Offset(boss, outside, R)` per boss
+  + `toolpath.Pocket` + the fixture keep-out gate. Profile mode is
+  unchanged except that **Boss features are never milled** (ADR-021) and a
+  void loop nested inside a boss is skipped (kept material — Law 7).
+
+**Related.** ADR-022 (refined), ADR-021 (the boss keep-out), ADR-020 (the
+plunge contract), ADR-013 (safe degradation), ADR-012 (the fixture gate),
+operations.md (the full model), toolpath (the implementation).

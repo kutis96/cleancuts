@@ -21,6 +21,37 @@
     "cut_z": {
       "type": "number",
       "description": "Tool-tip height of the cut. Must be strictly below slice_z and at or above the stock bottom. Omit for the default: the part's minimum Z (a cut through the part)."
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["profile", "pocket"],
+      "description": "profile (default): mill each contour — profiles outside, voids inside (v0.2). pocket (ADR-022): clear the region outer minus the kept bosses down to cut_z with the trochoidal raster. Bosses are never milled (ADR-021)."
+    },
+    "material": {
+      "type": "string",
+      "description": "Workpiece material name, matched against the tool's feeds[].material when feed/spindle are not given explicitly (ADR-024). E.g. \"aluminum-6061\"."
+    },
+    "stepover": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Pocket stepover s in mm (ADR-022/026). Omit for the default: the tool radius. Must be <= 2x the tool radius (coverage), else the plan is refused."
+    },
+    "lead_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Entry lead-in so the cutter starts outside the cut area (ADR-023). Omit for the safe default (a tangent lead-in of min(tool radius, 3 mm)).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["straight", "tangent"],
+          "description": "straight: extend the entry edge's line backward. tangent: an arc tangent to the entry edge, on the material-removal side. Default: tangent."
+        },
+        "length": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Lead-in length in mm. Default: min(tool radius, 3 mm)."
+        }
+      }
     }
   }
 }

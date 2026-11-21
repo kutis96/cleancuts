@@ -24,20 +24,72 @@ plunge, cutting loop, retract. See `internal/toolpath/profile.go`.
   it in front of `Loop` is the next step.
 - **Climb vs. conventional** per contour (see below).
 
-### Pocket (2D) — *phase 3*
+### Pocket (2D) — *phase 3* (ADR-021, ADR-022, ADR-026)
 
-Removes material from inside a boundary down to a depth, in one or more passes.
+Removes the material in a **region** down to `cut_z`.
 
-- **Passes:** multiple Z depths, each a full contour (or a stepped depth).
-- **Strategy per pass:**
-  - *Slotting → raster/offset* for shallow, wide pockets.
-  - *Adaptive clearing* (below) for deep, wide pockets to control load.
-- **Entry/plunge:** ramp or vertical plunge at a safe, non-cutting spot.
+- **The region** (ADR-021): `outer` (the depth-0 boundary) minus the
+  **bosses** — nested loops whose material rises *above* the slice plane
+  (kept, e.g. a cylinder standing on a base). Void loops are air (part of
+  the cleared region). The tool centre stays inside `outer`, outside every
+  boss.
 
-### Facing — *phase 3*
+**The path model** (ADR-026 — the full, testable spec; `toolpath.Pocket`):
 
-Removes material from the top of the stock to a uniform Z. Uses a face mill or
-end mill in a trochoidal/fan pattern to keep a constant engagement width.
+1. **Offset first** (the planner composes `comp`): the tool-centre domain is
+   `outer2 = Offset(outer, inside, R)` and, per boss,
+   `boss2 = Offset(boss, outside, R)`. Every tool-centre position must be
+   inside `outer2` and outside every `boss2` — the primary clearance
+   (Law 7), by construction.
+2. **Rows:** horizontal lines `y = yMin + s/2 + i·s` across `outer2`'s
+   bounding box, where `s` is the stepover (default `R`; must satisfy
+   `0 < s ≤ 2R` — coverage — else a precise refusal).
+3. **Clearable intervals:** row ∩ `outer2`, minus the row ∩ each `boss2` —
+   analytic line/edge intersection (kernel) + interval subtraction; the
+   result is a sorted list of disjoint intervals. Intervals shorter than
+   0.1 mm are dropped with a diagnostic (residual — the safe side, ADR-013).
+4. **Traversal:** rows bottom → top; row *i* runs left→right for even *i*,
+   right→left for odd *i*. A row with several intervals (a boss split it)
+   traverses them in that direction's order, with a **lift** between
+   consecutive intervals of the same row (retract → rapid → plunge): the gap
+   is over kept material or outside the region and is never cut through.
+5. **Row join:** between row *i*'s end P₁ and row *i+1*'s start P₂, a
+   **semicircle with diameter P₁P₂** (radius |P₁P₂|/2 — ADR-022's `s/2` is
+   the Δx = 0 special case). Of the two semicircles, the one whose centre is
+   inside `outer2` is preferred; the arc is gate-checked against the bosses
+   (no intersection, clearance ≥ R — `safety`'s loop helpers). If neither
+   passes, the join degrades to a **lift** (diagnostic recorded).
+6. **Plunges:** the first interval and every interval after a lift begin
+   with a vertical rapid plunge at its start (SafeZ → CutZ). The path's
+   first move is such a plunge — the ADR-020 contract the emitter relies on.
+   Every plunge point lies over the face (air above it — the face-section
+   property) and outside every boss (interval clipping) — never over kept
+   material.
+7. **Engagement & feed** (ADR-022): constant stepover → constant radial
+   engagement `a_e = R − sqrt(R² − (s/2)²)`; the cutting feed of every
+   pocket cutting move is `F · sqrt(a_e/D)` (underfeeding the joins — the
+   safe side). Both are pure functions in `toolpath`, independently tested.
+8. **Safety:** the whole path is gate-checked against the fixture keep-outs
+   (ADR-012, `safety.CheckPath`); the bosses are enforced by steps 1, 4, and
+   5 (a boss the tool would touch is a refusal, never a silent clip).
+
+- **Entry:** the lead-in (ADR-023) precedes the first interval's start — the
+  cutter starts outside the cut area, plunges there, and cuts into the
+  region. See part.md for the geometry.
+- **Coverage:** rows spaced `s ≤ 2R` sweep strips of width `2R` that overlap
+  — the region is fully covered by the tool disc.
+- **Tessellation bound:** a boss from a tessellated mesh (the Testmesh
+  cylinder is a 289-gon) is cleared to its *polygon*; the sagitta bound is
+  ≤ r·(1 − cos(π/n)) — for the Testmesh < 1 µm (documented, negligible).
+- **Passes:** v1 is a single depth `cut_z`; multiple Z depths (rough →
+  finish) is phase 4.
+
+### Facing — *phase 3* (ADR-022)
+
+Facing a top face down to a uniform Z is the pocket operation where the region
+is the whole top face (a single outer boundary, no bosses): the same trochoidal
+raster keeps a constant engagement width. A dedicated face mill is a later
+tooling refinement; v1 uses the end mill.
 
 ## The friend's requests, as first-class strategies
 

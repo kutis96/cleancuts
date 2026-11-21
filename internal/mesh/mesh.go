@@ -318,6 +318,52 @@ func (m Mesh) Slice(z float64) ([]kernel.Chain2, error) {
 	return loops, nil
 }
 
+// RegionTopZ returns the highest material Z within the region bounded by
+// outer, excluding the interiors of inners (ADR-021). has is true when the
+// region contains material (at least one qualifying triangle), false when it
+// is a void. It is computed over the mesh triangles whose centroid lies inside
+// outer and outside every inner (kernel.PointInContour; a boundary centroid
+// counts as outside — the safe side).
+//
+// This is the signal part.Detect uses to split a nested loop into a Boss
+// (has && topZ above the section — kept material rising above the plane) and
+// a Pocket (no material above — a void). It is a pure, testable primitive:
+// no I/O, no global state (Law 4, Law 5).
+func (m Mesh) RegionTopZ(outer kernel.Chain2, inners []kernel.Chain2) (topZ float64, has bool, err error) {
+	if err := m.Validate(); err != nil {
+		return 0, false, err
+	}
+	if err := outer.Validate(); err != nil {
+		return 0, false, fmt.Errorf("mesh: RegionTopZ outer boundary: %w", err)
+	}
+	topZ = math.Inf(-1)
+	for _, t := range m.Triangles {
+		a, b, c := m.Vertices[t.A], m.Vertices[t.B], m.Vertices[t.C]
+		cen := kernel.P2((a.X+b.X+c.X)/3.0, (a.Y+b.Y+c.Y)/3.0)
+		if !kernel.PointInContour(cen, outer) {
+			continue
+		}
+		inInner := false
+		for _, in := range inners {
+			if kernel.PointInContour(cen, in) {
+				inInner = true
+				break
+			}
+		}
+		if inInner {
+			continue
+		}
+		if z := math.Max(a.Z, math.Max(b.Z, c.Z)); z > topZ {
+			topZ = z
+		}
+		has = true
+	}
+	if !has {
+		return 0, false, nil
+	}
+	return topZ, true, nil
+}
+
 // planeThroughVertexError builds the precise, actionable refusal for a
 // plane that hits a vertex (the coplanar case, ADR-017): it names the
 // vertex and the triangle, and — when the levels allow — suggests the
