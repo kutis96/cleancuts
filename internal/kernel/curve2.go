@@ -166,8 +166,9 @@ type Chain2 struct {
 	Edges []Edge2
 }
 
-// NewChain2 validates and builds a chain: every edge valid, consecutive edges
-// share endpoints, and a closed chain has at least 3 edges.
+// NewChain2 validates and builds a chain: every edge valid, consecutive
+// edges share endpoints, and a closed chain has at least 2 edges (two
+// half-arcs make a full circle, ADR-014 — see IsClosed).
 func NewChain2(edges []Edge2) (Chain2, error) {
 	if len(edges) == 0 {
 		return Chain2{}, fmt.Errorf("kernel: chain needs at least 1 edge (got 0)")

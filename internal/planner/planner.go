@@ -150,6 +150,16 @@ func Plan(p Params) (Result, error) {
 	if err := p.Machine.Validate(); err != nil {
 		return Result{}, err
 	}
+	// The core plans in millimetres (ADR-001); units mapping is a
+	// post-processing concern and v1 implements only the identity (mm) map.
+	// Refuse inch machines up front: comparing mm process values against
+	// inch limits is a category error, and emitting G20 over mm numbers
+	// would scale the whole program by 25.4x (over-cut). Inch support is
+	// deferred (roadmap) — the safe failure is no program.
+	if p.Machine.Units != "mm" {
+		return Result{}, fmt.Errorf("planner: machine %q is configured for %s; v1 plans in millimetres and supports only mm machines (inch units are a deferred post-processing concern, see docs/gcode.md)",
+			p.Machine.ID, p.Machine.Units)
+	}
 	for i, k := range p.KeepOuts {
 		if err := k.Validate(); err != nil {
 			return Result{}, fmt.Errorf("planner: keep-out %d: %w", i, err)
@@ -222,6 +232,11 @@ func Plan(p Params) (Result, error) {
 
 	// The tool's flute must cover the depth it is asked to cut: a short
 	// flute would leave the top of the wall uncut (a silent wrong part).
+	// partTop is the mesh's max Z: intentionally over-conservative for a
+	// pocket that sits below a raised boss elsewhere (the flute must cover
+	// boss-top to cut-bottom even though only the pocket depth is cut).
+	// That is a safe-side over-refusal, acceptable in v1 — the correct
+	// fix is per-feature top Z once multi-pass Z scheduling exists.
 	partTop := p.Mesh.Bounds().Max.Z
 	if p.Tool.FluteLength > 0 && partTop-cutZ > p.Tool.FluteLength+kernel.AbsTol {
 		return Result{}, fmt.Errorf("planner: tool %q flute length %g cannot cover the cut: the part top is at z=%g and the cut is at z=%g — the top %g mm would be left uncut; use a longer flute or a smaller cut_z",

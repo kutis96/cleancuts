@@ -299,7 +299,10 @@ func gcodeOptions(m machine.Machine) gcode.Options {
 	o := gcode.DefaultOptions()
 	o.HeaderLines = append([]string{
 		fmt.Sprintf("%% CleanCuts — %s", m.Name),
-		"G21", // millimetres
+		// G21 (mm): v1 plans and emits in millimetres only — the planner
+		// refuses inch machines, so this header matches the dialect (ADR-001;
+		// inch support is a deferred post-processing concern).
+		"G21",
 		"G90", // absolute positioning
 	}, m.PostProcessor.HeaderLines...)
 	o.FooterLines = m.PostProcessor.FooterLines

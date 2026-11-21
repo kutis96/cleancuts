@@ -197,8 +197,9 @@ func Detect(m mesh.Mesh, z float64) ([]Feature, error) {
 		parent[i] = best
 	}
 
-	// Depth along the parent chain. A parent is always strictly smaller in
-	// area, so the chain cannot cycle — plain memoised recursion is exact.
+	// Depth along the parent chain. A parent contains its child, so it is
+	// always strictly larger in area — the chain cannot cycle, and plain
+	// memoised recursion is exact.
 	depth := make([]int, n)
 	done := make([]bool, n)
 	var depthOf func(i int) int
