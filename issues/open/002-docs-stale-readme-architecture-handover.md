@@ -25,3 +25,9 @@ Update all three to reflect the implemented package set and ADR-001…019. Keep 
 - No "arrive in later phases" / "to come" claim for an implemented feature in any of the three docs.
 - Package table, project tree, and dependency diagram list all 14 internal packages + CLI.
 - HANDOVER.md snapshot date and ADR range match reality at commit time.
+
+## Resolution
+
+(open — when closing, document here: which file(s)/sections changed,
+what and why, how it was verified, and date + commit. The record must
+stand on its own without reading the commit.)

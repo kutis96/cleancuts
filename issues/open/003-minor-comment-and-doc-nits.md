@@ -21,3 +21,9 @@ Correct the comments/docs; for `G21`, either read `machine.Units` or document th
 ## Acceptance criteria
 
 All items checked off, comments/docs accurate, `sh scripts/ci.sh` green.
+
+## Resolution
+
+(open — when closing, document here: which file(s)/lines changed per
+checklist item, what and why, how it was verified, and date + commit.
+The record must stand on its own without reading the commit.)

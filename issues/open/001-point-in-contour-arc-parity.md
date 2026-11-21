@@ -58,3 +58,9 @@ Then add a regression test in `contain2_test.go` for the lens region (either cas
 - New table case(s) with lens-region outside points for a >180° arc pair **and** two 180° arcs; fails before the fix, passes after.
 - `PointInContour` doc comment notes arcs are counted per distinct crossing point.
 - `sh scripts/ci.sh` green.
+
+## Resolution
+
+(open — when closing, document here: which file(s)/function(s) changed,
+what and why, how it was verified, and date + commit. The record must
+stand on its own without reading the commit.)

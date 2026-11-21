@@ -61,7 +61,11 @@ template are in `issues/README.md`.
 - **New issues:** bugs you discover and doc drift get the next free number
   (across both folders) and a file in `issues/open/`.
 - **Closing:** when you fix an issue, move the file to `issues/closed/`, set
-  Status to `closed`, and note the date + commit in Resolution.
+  Status to `closed`, and document the fix in Resolution — which
+  file(s)/function(s) you changed, what and why, how you verified it,
+  and the date + commit. The record must stand on its own: the commit
+  may include other work, so the fix must be readable from the issue
+  file alone.
 
 ## Version control (git) — commit as you go
 
