@@ -152,6 +152,13 @@ type Params struct {
 	DefaultMilling moves.Milling
 	// CutZ is the cutting depth, used to test keep-out Z ranges.
 	CutZ float64
+	// SafeZ is the top of the plunge column (the rapid safe height). When
+	// set above CutZ, the entry vertex must clear keep-outs active anywhere
+	// in [CutZ, SafeZ] — a clamp floating above the cutting plane is a real
+	// collision the single-height check misses (ADR-018 §4). Nil keeps the
+	// single-height behaviour at CutZ. (A pointer, not a 0 sentinel: the WCS
+	// is arbitrary and z=0 is a legitimate height.)
+	SafeZ *float64
 	// KeepOuts are the workholding zones the start point must avoid.
 	KeepOuts []KeepOut
 }
@@ -215,7 +222,13 @@ func PlanFeature(c kernel.Chain2, p Params) (Plan, error) {
 	}
 
 	// Pick the entry vertex outside the keep-out zones (hard constraint).
-	start, err := PickStart(chain, p.CutZ, p.KeepOuts)
+	var start kernel.Point2
+	var err error
+	if p.SafeZ != nil && *p.SafeZ > p.CutZ {
+		start, err = PickStartBetween(chain, p.CutZ, *p.SafeZ, p.KeepOuts)
+	} else {
+		start, err = PickStart(chain, p.CutZ, p.KeepOuts)
+	}
 	if err != nil {
 		return Plan{}, err
 	}
@@ -255,6 +268,52 @@ func zoneContaining(p kernel.Point2, z float64, keepOuts []KeepOut) *KeepOut {
 	for i := range keepOuts {
 		if keepOuts[i].Contains(p, z) {
 			return &keepOuts[i]
+		}
+	}
+	return nil
+}
+
+// PickStartBetween returns the first vertex (in chain order) whose plunge
+// column through [zLo, zHi] is clear of every keep-out: a zone applies if
+// its Z range overlaps [zLo, zHi] and its footprint contains the vertex
+// (ADR-018 §4 — the entry must survive the whole plunge, not just the
+// cutting plane). If every vertex is inside some applicable zone, it
+// refuses with the zones named — the safe failure is "no plan".
+func PickStartBetween(c kernel.Chain2, zLo, zHi float64, keepOuts []KeepOut) (kernel.Point2, error) {
+	for _, e := range c.Edges {
+		v := e.Start()
+		if zoneContainingColumn(v, zLo, zHi, keepOuts) == nil {
+			return v, nil
+		}
+	}
+	if len(keepOuts) > 0 {
+		zones := make([]string, 0, len(keepOuts))
+		for _, k := range keepOuts {
+			zones = append(zones, orNone(k.Name))
+		}
+		return kernel.Point2{}, fmt.Errorf(
+			"planning: every vertex of the contour lies in a keep-out zone over Z=%g..%g (%s); no safe entry point — move the fixture or use a different feature",
+			zLo, zHi, joinNames(zones))
+	}
+	return kernel.Point2{}, fmt.Errorf("planning: contour has no vertices to enter from")
+}
+
+// zoneContainingColumn returns the first keep-out zone whose Z range
+// overlaps [lo, hi] and whose XY footprint contains p, or nil.
+func zoneContainingColumn(p kernel.Point2, lo, hi float64, keepOuts []KeepOut) *KeepOut {
+	for i := range keepOuts {
+		k := &keepOuts[i]
+		switch {
+		case k.Box != nil:
+			if k.Box.Max.Z >= lo && k.Box.Min.Z <= hi &&
+				p.X >= k.Box.Min.X && p.X <= k.Box.Max.X &&
+				p.Y >= k.Box.Min.Y && p.Y <= k.Box.Max.Y {
+				return k
+			}
+		case k.Cyl != nil:
+			if k.Cyl.ZMax >= lo && k.Cyl.ZMin <= hi && p.Dist(k.Cyl.Center) <= k.Cyl.Radius {
+				return k
+			}
 		}
 	}
 	return nil

@@ -295,6 +295,16 @@ func rectangle(corners []kernel.Point2) (kernel.Chain2, error) {
 	return kernel.NewChain2(edges)
 }
 
+// ZRange returns the stock's Z range [minZ, maxZ] in the canonical WCS
+// (mm). Consumers use it for the Z model: the safe height is the stock top
+// plus clearance (ADR-018 §4), and a cut below minZ would cut the table.
+func (s Stock) ZRange() (minZ, maxZ float64, err error) {
+	if err := s.Validate(); err != nil {
+		return 0, 0, err
+	}
+	return s.zRange()
+}
+
 // TopAt returns the top Z of the stock above the point (x, y). For the v1
 // shapes (extrusions) this is the stock's Z-max; a mesh stock will return
 // the true surface height behind this same call (ADR-015). A plunge must

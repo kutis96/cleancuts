@@ -224,6 +224,38 @@ func TestSectionAtInclusiveAtBoundaries(t *testing.T) {
 	}
 }
 
+// --- ZRange -------------------------------------------------------------
+
+func TestZRange(t *testing.T) {
+	cases := []struct {
+		name   string
+		s      Stock
+		lo, hi float64
+	}{
+		{"box", boxStock(), 0, 20},
+		{"cylinder", cylStock(), 0, 15},
+		{"prism", prismStock(), 0, 12},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			lo, hi, err := c.s.ZRange()
+			if err != nil {
+				t.Fatalf("ZRange: %v", err)
+			}
+			if lo != c.lo || hi != c.hi {
+				t.Fatalf("ZRange = [%g, %g], want [%g, %g]", lo, hi, c.lo, c.hi)
+			}
+		})
+	}
+
+	t.Run("invalid stock refuses", func(t *testing.T) {
+		_, _, err := Stock{ID: "bad"}.ZRange()
+		if err == nil {
+			t.Fatal("expected a validation refusal")
+		}
+	})
+}
+
 // --- TopAt --------------------------------------------------------------
 
 func TestTopAt(t *testing.T) {

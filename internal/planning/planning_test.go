@@ -177,6 +177,101 @@ func TestKeepOutAboveCutIsIgnored(t *testing.T) {
 	}
 }
 
+// TestPickStartColumnRange pins the ADR-018 §4 entry rule: the plunge
+// column [CutZ, SafeZ] must clear the keep-outs, so a clamp floating above
+// the cutting plane still blocks an entry underneath it.
+func TestPickStartColumnRange(t *testing.T) {
+	c := squareCCW(t) // vertices (0,0), (10,0), (10,10), (0,10)
+	// A clamp floating above the cutting plane (z 0..20), over vertex (0,0).
+	floating := KeepOut{
+		Name: "floating-clamp",
+		Box:  &Box{Min: kernel.P3(-1, -1, 0), Max: kernel.P3(1, 1, 20)},
+	}
+	sz := func(z float64) *float64 { return &z }
+	p := Params{Kind: Pocket, Spindle: RotationCCW, CutZ: -10, KeepOuts: []KeepOut{floating}}
+
+	t.Run("SafeZ above the clamp blocks the entry underneath", func(t *testing.T) {
+		p.SafeZ = sz(30) // column [-10, 30] overlaps the clamp's [0, 20]
+		plan, err := PlanFeature(c, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !plan.Start.Eq(kernel.P2(10, 0), 1e-9) {
+			t.Fatalf("start = %v, want (10,0) — (0,0) sits under the floating clamp", plan.Start)
+		}
+	})
+
+	t.Run("SafeZ unset keeps the single-height reading at the cut", func(t *testing.T) {
+		// Fresh params: SafeZ nil (the previous subtest set p.SafeZ).
+		pNil := Params{Kind: Pocket, Spindle: RotationCCW, CutZ: -10, KeepOuts: []KeepOut{floating}}
+		plan, err := PlanFeature(c, pNil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !plan.Start.Eq(kernel.P2(0, 0), 1e-9) {
+			t.Fatalf("start = %v, want (0,0) — the column is just the cutting plane", plan.Start)
+		}
+	})
+
+	t.Run("SafeZ below the clamp keeps the entry", func(t *testing.T) {
+		p2 := Params{Kind: Pocket, Spindle: RotationCCW, CutZ: -10, SafeZ: sz(-5), KeepOuts: []KeepOut{floating}}
+		plan, err := PlanFeature(c, p2) // column [-10, -5] misses the clamp's [0, 20]
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !plan.Start.Eq(kernel.P2(0, 0), 1e-9) {
+			t.Fatalf("start = %v, want (0,0) — the safe height is below the clamp", plan.Start)
+		}
+	})
+
+	t.Run("a clamp below the whole column does not apply", func(t *testing.T) {
+		low := KeepOut{
+			Name: "below",
+			Box:  &Box{Min: kernel.P3(-1, -1, -40), Max: kernel.P3(1, 1, -15)},
+		}
+		p2 := Params{Kind: Pocket, Spindle: RotationCCW, CutZ: -10, SafeZ: sz(30), KeepOuts: []KeepOut{low}}
+		plan, err := PlanFeature(c, p2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !plan.Start.Eq(kernel.P2(0, 0), 1e-9) {
+			t.Fatalf("start = %v, want (0,0) — the zone is below the column", plan.Start)
+		}
+	})
+
+	t.Run("cylinder column overlap also blocks", func(t *testing.T) {
+		cyl := KeepOut{
+			Name: "cyl-clamp",
+			Cyl:  &Cylinder{Center: kernel.P2(0, 0), Radius: 2, ZMin: 0, ZMax: 20},
+		}
+		p3 := Params{Kind: Pocket, Spindle: RotationCCW, CutZ: -10, SafeZ: sz(30), KeepOuts: []KeepOut{cyl}}
+		plan, err := PlanFeature(c, p3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !plan.Start.Eq(kernel.P2(10, 0), 1e-9) {
+			t.Fatalf("start = %v, want (10,0)", plan.Start)
+		}
+	})
+
+	t.Run("every vertex in the column refuses and names the zone and range", func(t *testing.T) {
+		room := KeepOut{
+			Name: "vise",
+			Box:  &Box{Min: kernel.P3(-5, -5, 0), Max: kernel.P3(15, 15, 20)},
+		}
+		p4 := Params{Kind: Pocket, Spindle: RotationCCW, CutZ: -10, SafeZ: sz(30), KeepOuts: []KeepOut{room}}
+		_, err := PlanFeature(c, p4)
+		if err == nil {
+			t.Fatal("expected a refusal when every vertex is in the column")
+		}
+		for _, want := range []string{"vise", "Z=-10..30"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q should mention %q", err, want)
+			}
+		}
+	})
+}
+
 func TestAllVerticesInKeepOutRefuses(t *testing.T) {
 	c := squareCCW(t)
 	room := KeepOut{
