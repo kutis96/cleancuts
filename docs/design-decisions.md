@@ -800,3 +800,67 @@ diagnostic: residual material is the safe side (ADR-013).
 **Related.** ADR-008 (composable stages), ADR-009 (climb predicate),
 ADR-012 (keep-outs), ADR-013 (comp), ADR-015 (stock), ADR-017 (mesh/Slice),
 roadmap phase 2 (operation planner, first cut).
+
+## ADR-019 — The program layer: linking rapids are first-class paths; fixture mapping is data (Accepted)
+
+**Context.** Slice L completes phase 2: `moves.Program` + `gcode.EmitProgram`
+(anticipated in ADR-014) and the `generate` CLI. The planner's paths are
+self-contained (plunge → cutting loop → retract, ADR-018 §4). What is left
+to decide: how paths group into one program, how the machine travels between
+features, how the fixture JSON (schema already exists) becomes the planner's
+keep-outs, and what the CLI surface looks like.
+
+**Decision.**
+
+1. **`moves.Program` is an ordered group of paths:** `id`, `name`, `paths`,
+   `metadata`. `Validate()` (Law 5): non-empty ID, at least one path, each
+   path valid, and **unique path IDs** — paths are addressable objects the
+   user inspects and overrides (ADR-003) and the future GUI selects.
+2. **The linking rapid between consecutive features is a standalone
+   one-move path** (a *link* path), inserted between the two feature paths
+   by `planner.ToProgram`. The program is therefore a flat, uniform list of
+   paths, and the emitter simply concatenates them in order — no special
+   linking logic in `gcode`. The link is visible in `.moves.json` (and
+   overridable there, like any move) and is verified against the keep-outs
+   at construction time with `safety` — the safe failure is a refusal naming
+   the zones, never a rapid through a clamp. A zero-length link (consecutive
+   features sharing an entry) is omitted, not emitted.
+3. **`internal/fixture` is the portable workholding model** (the existing
+   `fixture.schema.json` is its contract, Law 6) with
+   `KeepOuts() → []planning.KeepOut`. Boxes map directly. Cylinders map iff
+   vertical (axis ±Z, base centre + length → Z range). Anything else — a
+   non-vertical axis, a mesh volume — is a precise refusal: planning against
+   a zone the gate cannot verify is a Law 7 violation, and the safe side is
+   to say so and stop.
+4. **`gcode.EmitProgram` is one header + the paths in order + one footer:**
+   the header carries the program's spindle (the max across paths) and
+   coolant (if any path wants it); each path emits with a comment; the
+   footer turns coolant and spindle off and ends the program. `Emit`
+   (single path) stays for the v0.1 surface.
+5. **The CLI `generate`** is the one place I/O lives (Law 4):
+   `--part --stock --fixture --tool [--tool-id] --machine [--feed 500
+   --spindle 8000 --coolant off --milling climb] [--out … --nc …]`. It
+   loads the JSON (part recipe, mesh file, stock, fixture, tool library or
+   single tool, machine), runs `planner.Plan`, builds and verifies the
+   program, and writes `.moves.json` (indented, the inspectable
+   intermediate format) plus `.nc` (the machine's post-processor codes from
+   its JSON). It prints a short summary — the Z model, the features, any
+   diagnostics — and warns (without failing) when the part mesh is not a
+   closed 2-manifold. Feed and spindle are explicit in v1; resolving them
+   from the tool's `feeds[]` per material (the ProcessTable) is phase 3.
+
+**Consequences.**
+
+- The program is data the user can see end to end: every move, including
+  the travels between features, is a first-class, overridable object in
+  `.moves.json` — the "override per-feature decisions" request (ADR-003)
+  is satisfied at the program level now, without a new format.
+- The emitter stays trivially reviewable: header, paths in order, footer.
+  Machine dialect lives only in the Options (from the machine JSON).
+- Fixture mapping is a small, schema-backed, fully tested data function —
+  adding a zone shape to v1 is a mapping change, not a pipeline change.
+- The CLI is the only place that reads or writes a file in the project.
+
+**Related.** ADR-003 (the seam), ADR-007 (config is data), ADR-012
+(keep-outs), ADR-014 (program primitives), ADR-018 §4 (linking rapids are
+the program layer's job), roadmap phase 2 (CLI generate, slice L).
