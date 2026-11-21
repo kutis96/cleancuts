@@ -61,7 +61,8 @@ levels** — the plane must not pass through a vertex (the clean case of
 
 One rule covers profiles (depth 0), holes (depth 1), islands (depth 2), and
 arbitrary nesting. It agrees with the ADR-009 climb predicate: with a CCW
-spindle, profiles/islands mill CCW and pockets CW — both in climb.
+(right-handed) spindle, profiles/islands mill CW and pockets CCW — both in
+climb (the standard CAM convention).
 
 5. **Disjointness (Law 7):** any edge of one loop intersecting any edge of
    another is refused with the two loops named — the kept material would be
