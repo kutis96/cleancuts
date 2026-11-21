@@ -161,3 +161,83 @@ func TestPathJSONRoundTrip(t *testing.T) {
 		t.Errorf("round-tripped path should validate: %v", err)
 	}
 }
+
+// --- Program -------------------------------------------------------------
+
+// simplePath builds a valid one-move path for program tests.
+func simplePath(id string, x float64) Path {
+	return Path{
+		ID:   id,
+		Name: id,
+		Moves: []Move{{
+			Kind: KindRapid,
+			From: kernel.P3(0, 0, 10),
+			To:   kernel.P3(x, 0, 0),
+		}},
+	}
+}
+
+func TestProgramValidate(t *testing.T) {
+	ok := Program{ID: "prog", Paths: []Path{simplePath("a", 1), simplePath("b", 2)}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid program rejected: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		prog    Program
+		wantSub string
+	}{
+		{"no ID", Program{Paths: []Path{simplePath("a", 1)}}, "non-empty ID"},
+		{"no paths", Program{ID: "p"}, "no paths"},
+		{"invalid path inside", Program{ID: "p", Paths: []Path{{ID: ""}}}, "path 0"},
+		{"duplicate path IDs", Program{ID: "p", Paths: []Path{simplePath("a", 1), simplePath("a", 2)}}, "unique"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.prog.Validate()
+			if err == nil || !strings.Contains(err.Error(), c.wantSub) {
+				t.Fatalf("want error mentioning %q, got %v", c.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestProgramJSONRoundTrip(t *testing.T) {
+	prog := Program{
+		ID:   "prog-1",
+		Name: "a test program",
+		Paths: []Path{
+			simplePath("a", 1),
+			Path{
+				ID:   "link-1",
+				Name: "travel",
+				Moves: []Move{{
+					Kind:    KindRapid,
+					From:    kernel.P3(1, 0, 0),
+					To:      kernel.P3(2, 0, 10),
+					Comment: "travel to next feature",
+				}},
+			},
+			simplePath("b", 3),
+		},
+		Metadata: map[string]string{"cut_z": "0", "safe_z": "25"},
+	}
+	data, err := json.Marshal(prog)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back Program
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.ID != prog.ID || len(back.Paths) != 3 || back.Metadata["safe_z"] != "25" {
+		t.Fatalf("round-trip mismatch: %+v", back)
+	}
+	if back.Paths[1].Moves[0].Comment != "travel to next feature" {
+		t.Fatalf("link move lost: %+v", back.Paths[1].Moves[0])
+	}
+	if err := back.Validate(); err != nil {
+		t.Fatalf("round-tripped program should validate: %v", err)
+	}
+}

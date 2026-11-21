@@ -20,6 +20,7 @@ package planner
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/kutis96/cleancuts/internal/comp"
 	"github.com/kutis96/cleancuts/internal/kernel"
@@ -339,6 +340,12 @@ func planFeature(
 		if err != nil {
 			return fmt.Errorf("planner: %s (chain %d of %d): %v", f, ci+1, len(res.Chains), err)
 		}
+		// Addressable ID (ADR-019 §1): paths are objects the user
+		// inspects and overrides, so every path has a unique, meaningful ID.
+		path.ID = fmt.Sprintf("%s-%d", f.Kind, f.Index)
+		if len(res.Chains) > 1 {
+			path.ID = fmt.Sprintf("%s-%d-c%d", f.Kind, f.Index, ci+1)
+		}
 		// The envelope gate (ADR-012): the tool's sweep, not just its
 		// centre, must clear every keep-out — a hard constraint.
 		if err := safety.CheckPath(path, p.Tool.Radius(), p.KeepOuts); err != nil {
@@ -351,4 +358,86 @@ func planFeature(
 		})
 	}
 	return nil
+}
+
+// ToProgram groups the plan's feature paths into an executable program
+// (ADR-019 §2): the linking rapid between consecutive features is
+// materialized as a standalone one-move path and verified against the
+// keep-outs — a travel through a clamp is a refusal naming the zones, not
+// a silent collision. A zero-length link (consecutive features sharing an
+// entry) is omitted, not emitted. The Z model rides along in metadata for
+// inspection and the GUI.
+func (r Result) ToProgram(programID string, keepOuts []planning.KeepOut, toolRadius float64) (moves.Program, error) {
+	if programID == "" {
+		return moves.Program{}, fmt.Errorf("planner: program ID is required")
+	}
+	if err := r.Validate(); err != nil {
+		return moves.Program{}, fmt.Errorf("planner: result: %w", err)
+	}
+	if toolRadius < 0 {
+		return moves.Program{}, fmt.Errorf("planner: tool radius must be >= 0 (got %g)", toolRadius)
+	}
+	for i, k := range keepOuts {
+		if err := k.Validate(); err != nil {
+			return moves.Program{}, fmt.Errorf("planner: keep-out %d: %w", i, err)
+		}
+	}
+
+	paths := make([]moves.Path, 0, 2*len(r.Features)-1)
+	for i, fp := range r.Features {
+		if i > 0 {
+			link, err := linkPath(r.Features[i-1], fp, i, keepOuts, toolRadius)
+			if err != nil {
+				return moves.Program{}, err
+			}
+			if link != nil {
+				paths = append(paths, *link)
+			}
+		}
+		paths = append(paths, fp.Path)
+	}
+
+	prog := moves.Program{
+		ID:    programID,
+		Paths: paths,
+		Metadata: map[string]string{
+			"slice_z": strconv.FormatFloat(r.SliceZ, 'g', -1, 64),
+			"cut_z":   strconv.FormatFloat(r.CutZ, 'g', -1, 64),
+			"safe_z":  strconv.FormatFloat(r.SafeZ, 'g', -1, 64),
+		},
+	}
+	if err := prog.Validate(); err != nil {
+		return moves.Program{}, fmt.Errorf("planner: %w", err)
+	}
+	return prog, nil
+}
+
+// linkPath builds the verified travel between two consecutive features
+// (ADR-019 §2), or nil when they share the same retract/plunge point.
+func linkPath(prev, next FeaturePath, idx int, keepOuts []planning.KeepOut, toolRadius float64) (*moves.Path, error) {
+	from := prev.Path.Moves[len(prev.Path.Moves)-1].To // the retract top
+	to := next.Path.Moves[0].From                      // the plunge top
+	if from.Eq(to, kernel.AbsTol) {
+		return nil, nil
+	}
+	link := moves.Path{
+		ID:        fmt.Sprintf("link-%d", idx),
+		Name:      fmt.Sprintf("travel %s → %s", prev.Path.ID, next.Path.ID),
+		Operation: "travel",
+		Moves: []moves.Move{{
+			Kind:    moves.KindRapid,
+			From:    from,
+			To:      to,
+			Comment: "travel to next feature",
+		}},
+	}
+	if err := link.Validate(); err != nil {
+		return nil, fmt.Errorf("planner: travel between %s and %s: %w", prev.Path.ID, next.Path.ID, err)
+	}
+	// The envelope gate (ADR-012) on the travel too: a rapid through a
+	// clamp destroys the setup — refuse, naming the zones.
+	if err := safety.CheckPath(link, toolRadius, keepOuts); err != nil {
+		return nil, fmt.Errorf("planner: travel between %s and %s: %w", prev.Path.ID, next.Path.ID, err)
+	}
+	return &link, nil
 }

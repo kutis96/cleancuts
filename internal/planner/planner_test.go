@@ -557,6 +557,124 @@ func TestPlanIslandWasher(t *testing.T) {
 	}
 }
 
+// --- ToProgram (ADR-019 §2) -------------------------------------------------
+
+func TestToProgramInsertsVerifiedLinks(t *testing.T) {
+	base := baseParams(t)
+	res, err := Plan(base)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	prog, err := res.ToProgram("plate-first-cut", base.KeepOuts, base.Tool.Radius())
+	if err != nil {
+		t.Fatalf("ToProgram: %v", err)
+	}
+	if err := prog.Validate(); err != nil {
+		t.Fatalf("program: %v", err)
+	}
+	// Two features + one link between them.
+	if len(prog.Paths) != 3 {
+		t.Fatalf("paths = %d, want 3 (feature, link, feature)", len(prog.Paths))
+	}
+	ids := []string{prog.Paths[0].ID, prog.Paths[1].ID, prog.Paths[2].ID}
+	if ids[0] != "profile-0" || ids[1] != "link-1" || ids[2] != "pocket-1" {
+		t.Fatalf("path IDs = %v, want [profile-0 link-1 pocket-1]", ids)
+	}
+	// The link is one rapid from the profile's retract top to the pocket's
+	// plunge top, both at the safe height.
+	link := prog.Paths[1]
+	if len(link.Moves) != 1 || link.Moves[0].Kind != moves.KindRapid {
+		t.Fatalf("link = %+v, want one rapid move", link.Moves)
+	}
+	mv := link.Moves[0]
+	if mv.From.Z != res.SafeZ || mv.To.Z != res.SafeZ {
+		t.Fatalf("link at Z %g..%g, want the safe height %g on both ends", mv.From.Z, mv.To.Z, res.SafeZ)
+	}
+	// The Z model rides along in metadata.
+	if prog.Metadata["cut_z"] != "0" || prog.Metadata["safe_z"] != "25" || prog.Metadata["slice_z"] != "5" {
+		t.Fatalf("metadata = %v", prog.Metadata)
+	}
+}
+
+func TestToProgramRefusesLinkThroughKeepOut(t *testing.T) {
+	base := baseParams(t)
+	res, err := Plan(base)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	// A tall wall between the two entries, covering the safe height: the
+	// link rapid would sweep straight through it.
+	e1 := res.Features[0].Entry
+	e2 := res.Features[1].Entry
+	mid := kernel.P2((e1.X+e2.X)/2, (e1.Y+e2.Y)/2)
+	base.KeepOuts = []planning.KeepOut{{
+		Name: "tall-clamp",
+		Box: &planning.Box{
+			Min: kernel.P3(mid.X-2, mid.Y-2, 20), // covers safeZ = 25
+			Max: kernel.P3(mid.X+2, mid.Y+2, 30),
+		},
+	}}
+	_, err = res.ToProgram("prog", base.KeepOuts, base.Tool.Radius())
+	if err == nil || !strings.Contains(err.Error(), "tall-clamp") {
+		t.Fatalf("want a refusal naming the clamp, got %v", err)
+	}
+}
+
+func TestToProgramOmitsZeroLengthLink(t *testing.T) {
+	// Two features sharing the same entry point: the travel is zero-length
+	// and must be omitted, not emitted (ADR-019 §2).
+	loop := moves.Path{
+		ID:   "a",
+		Name: "a",
+		Moves: []moves.Move{
+			{Kind: moves.KindRapid, From: kernel.P3(0, 0, 25), To: kernel.P3(0, 0, 0)},
+			{Kind: moves.KindLinear, From: kernel.P3(0, 0, 0), To: kernel.P3(10, 0, 0), Feed: 500, Milling: moves.MillingClimb},
+			{Kind: moves.KindLinear, From: kernel.P3(10, 0, 0), To: kernel.P3(10, 10, 0), Feed: 500, Milling: moves.MillingClimb},
+			{Kind: moves.KindLinear, From: kernel.P3(10, 10, 0), To: kernel.P3(0, 10, 0), Feed: 500, Milling: moves.MillingClimb},
+			{Kind: moves.KindLinear, From: kernel.P3(0, 10, 0), To: kernel.P3(0, 0, 0), Feed: 500, Milling: moves.MillingClimb},
+			{Kind: moves.KindRapid, From: kernel.P3(0, 0, 0), To: kernel.P3(0, 0, 25)},
+		},
+	}
+	loopB := loop
+	loopB.ID = "b"
+	res := Result{
+		SliceZ: 5,
+		CutZ:   0,
+		SafeZ:  25,
+		Features: []FeaturePath{
+			{Feature: part.Feature{Index: 0, Kind: planning.Profile, Area: 100}, Path: loop, Entry: kernel.P2(0, 0)},
+			{Feature: part.Feature{Index: 1, Kind: planning.Profile, Area: 100}, Path: loopB, Entry: kernel.P2(0, 0)},
+		},
+	}
+	prog, err := res.ToProgram("prog", nil, 5)
+	if err != nil {
+		t.Fatalf("ToProgram: %v", err)
+	}
+	if len(prog.Paths) != 2 {
+		t.Fatalf("paths = %d, want 2 (no zero-length link)", len(prog.Paths))
+	}
+}
+
+func TestToProgramRefusals(t *testing.T) {
+	res := Result{SliceZ: 5, CutZ: 0, SafeZ: 25, Features: []FeaturePath{{
+		Feature: part.Feature{Index: 0, Kind: planning.Profile, Area: 100},
+		Path: moves.Path{
+			ID: "a",
+			Moves: []moves.Move{
+				{Kind: moves.KindRapid, From: kernel.P3(0, 0, 25), To: kernel.P3(0, 0, 0)},
+				{Kind: moves.KindRapid, From: kernel.P3(0, 0, 0), To: kernel.P3(0, 0, 25)},
+			},
+		},
+		Entry: kernel.P2(0, 0),
+	}}}
+	if _, err := res.ToProgram("", nil, 5); err == nil {
+		t.Fatal("want a refusal for an empty program ID")
+	}
+	if _, err := res.ToProgram("p", nil, -1); err == nil {
+		t.Fatal("want a refusal for a negative tool radius")
+	}
+}
+
 // --- result invariants -------------------------------------------------------
 
 func TestResultValidate(t *testing.T) {
