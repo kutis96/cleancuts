@@ -58,6 +58,60 @@ func TestEmitTessellated(t *testing.T) {
 	}
 }
 
+// TestCoordFormat pins the coordinate rendering: fixed precision with
+// trailing-zero trim, -0 normalised to 0, and CoordPrecision honoured. The
+// whole point is that float64 ulps from the core (e.g. -5.000000000000002
+// from a 22.5° offset corner) must not leak into G-code.
+func TestCoordFormat(t *testing.T) {
+	w := &writer{o: DefaultOptions()}
+	cases := []struct {
+		v    float64
+		want string
+	}{
+		{-5.000000000000002, "-5"}, // the real-world float artifact
+		{5.0, "5"},                 // integer stays bare
+		{-0.0, "0"},                // -0 normalised
+		{0.123456789, "0.1235"},    // rounded to 1 µm
+		{1.5, "1.5"},               // no trailing zeros
+		{-0.00001, "0"},            // below precision rounds to 0
+		{123.456789, "123.4568"},   // multi-digit rounding
+		{1000.0, "1000"},           // no trailing dot
+	}
+	for _, c := range cases {
+		if got := w.fmt(c.v); got != c.want {
+			t.Errorf("fmt(%v) = %q, want %q", c.v, got, c.want)
+		}
+	}
+
+	// CoordPrecision is honoured (2 decimals = 0.01 mm).
+	w2 := &writer{o: DefaultOptions()}
+	w2.o.CoordPrecision = 2
+	if got := w2.fmt(1.234); got != "1.23" {
+		t.Errorf("fmt(1.234) at precision 2 = %q, want %q", got, "1.23")
+	}
+}
+
+// TestEmitTrimsFloatUlps runs a full emit through the same value that
+// produced the real-world artifact, to pin the end-to-end behaviour.
+func TestEmitTrimsFloatUlps(t *testing.T) {
+	p := moves.Path{
+		ID: "p", Operation: "profile", ToolID: "t1",
+		Moves: []moves.Move{
+			{Kind: moves.KindLinear, From: kernel.P3(0, 0, 0), To: kernel.P3(-5.000000000000002, -5, 0), Feed: 500},
+		},
+	}
+	out, err := Emit(p, DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "G1 X-5 Y-5 Z0 F500") {
+		t.Errorf("float ulps leaked into G-code:\n%s", out)
+	}
+	if strings.Contains(out, "5.000000000000002") {
+		t.Errorf("raw float64 value must not appear:\n%s", out)
+	}
+}
+
 func TestEmitRejectsInvalid(t *testing.T) {
 	bad := moves.Path{ID: "bad", Moves: []moves.Move{
 		{Kind: moves.KindLinear, From: kernel.P3(0, 0, 0), To: kernel.P3(1, 0, 0), Feed: 0},

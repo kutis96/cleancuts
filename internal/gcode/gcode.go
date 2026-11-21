@@ -33,6 +33,12 @@ type Options struct {
 	ArcTolDeg float64
 	// CommentPrefix prefixes block comments (default ";").
 	CommentPrefix string
+	// CoordPrecision is the number of decimal places for coordinates
+	// (default 4 = 1 µm). G-code is a decimal text protocol for machines
+	// with finite resolution — formatting is a post-processing concern
+	// (ADR-002), and it also absorbs the last ulps of the core's
+	// float64 arithmetic so the output stays clean.
+	CoordPrecision int
 	// SpindleStart / SpindleStop / ProgramEnd are M-codes (defaults 3/5/2).
 	SpindleStart int
 	SpindleStop  int
@@ -45,14 +51,15 @@ type Options struct {
 // DefaultOptions returns sensible defaults.
 func DefaultOptions() Options {
 	return Options{
-		UseArms:       true,
-		ArcTolDeg:     5,
-		CommentPrefix: ";",
-		SpindleStart:  3,
-		SpindleStop:   5,
-		ProgramEnd:    2,
-		CoolantOn:     8,
-		CoolantOff:    9,
+		UseArms:        true,
+		ArcTolDeg:      5,
+		CommentPrefix:  ";",
+		CoordPrecision: 4,
+		SpindleStart:   3,
+		SpindleStop:    5,
+		ProgramEnd:     2,
+		CoolantOn:      8,
+		CoolantOff:     9,
 	}
 }
 
@@ -76,6 +83,9 @@ func EmitProgram(p moves.Program, o Options) (string, error) {
 	}
 	if o.ArcTolDeg <= 0 {
 		o.ArcTolDeg = 5
+	}
+	if o.CoordPrecision <= 0 {
+		o.CoordPrecision = 4
 	}
 
 	spindle := 0.0
@@ -155,9 +165,9 @@ func (w *writer) comment(s string) {
 func writeMove(w *writer, m moves.Move) error {
 	switch m.Kind {
 	case moves.KindRapid:
-		w.line(fmt.Sprintf("G0 %s", coords(m)))
+		w.line(fmt.Sprintf("G0 %s", w.coords(m)))
 	case moves.KindLinear:
-		w.line(fmt.Sprintf("G1 %s F%g", coords(m), m.Feed))
+		w.line(fmt.Sprintf("G1 %s F%g", w.coords(m), m.Feed))
 	case moves.KindArcCCW, moves.KindArcCW:
 		code := "G3"
 		if m.Kind == moves.KindArcCW {
@@ -166,18 +176,31 @@ func writeMove(w *writer, m moves.Move) error {
 		if !w.o.UseArms {
 			return tessellateArc(w, m)
 		}
-		// I/J are centre offsets relative to the arc start point.
+		// I/J are centre offsets relative to the arc start point, at the
+		// same precision as the coordinates (they are coordinates too).
 		cx := m.Center.X - m.From.X
 		cy := m.Center.Y - m.From.Y
-		w.line(fmt.Sprintf("%s %s I%g J%g F%g", code, coords(m), cx, cy, m.Feed))
+		w.line(fmt.Sprintf("%s %s I%s J%s F%g", code, w.coords(m), w.fmt(cx), w.fmt(cy), m.Feed))
 	default:
 		return fmt.Errorf("gcode: unknown move kind %q", m.Kind)
 	}
 	return nil
 }
 
-func coords(m moves.Move) string {
-	return fmt.Sprintf("X%g Y%g Z%g", m.To.X, m.To.Y, m.To.Z)
+func (w *writer) coords(m moves.Move) string {
+	return fmt.Sprintf("X%s Y%s Z%s", w.fmt(m.To.X), w.fmt(m.To.Y), w.fmt(m.To.Z))
+}
+
+// fmt renders a coordinate at the configured precision, trimming trailing
+// zeros (so "X-5", not "X-5.0000") and normalising -0 to 0.
+func (w *writer) fmt(v float64) string {
+	s := fmt.Sprintf("%.*f", w.o.CoordPrecision, v)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	if s == "-0" {
+		s = "0"
+	}
+	return s
 }
 
 // tessellateArc approximates an arc with G1 line segments no wider than
@@ -205,7 +228,7 @@ func tessellateArc(w *writer, m moves.Move) error {
 		theta := a0 + t*sweep
 		x := m.Center.X + r*math.Cos(theta)
 		y := m.Center.Y + r*math.Sin(theta)
-		w.line(fmt.Sprintf("G1 X%g Y%g Z%g F%g", x, y, m.To.Z, m.Feed))
+		w.line(fmt.Sprintf("G1 X%s Y%s Z%s F%g", w.fmt(x), w.fmt(y), w.fmt(m.To.Z), m.Feed))
 	}
 	return nil
 }
