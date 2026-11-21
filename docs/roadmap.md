@@ -6,10 +6,11 @@ and agents. The spine (kernel → features → **planning** → generation → m
 post-processing) is fixed and **designed to be 3D-ready** (ADR-011); each phase
 *adds a stage or a capability* to it rather than re-architecting.
 
-> Status: **v0.1** is complete (foundation scaffold). Everything below is
-> planned. Phase boundaries may be re-scoped as we learn, but the *order* —
-> precise geometry before strategies, strategies before smoothing, 2.5D before
-> 3D — is deliberate and should be preserved.
+> Status: **v0.1** (foundation) and **v0.2 / Phase 2** (real 2D: import,
+> compensation, climb/conventional, first-cut planner, `generate` CLI) are
+> complete. Phase 3+ is planned. Phase boundaries may be re-scoped as we
+> learn, but the *order* — precise geometry before strategies, strategies
+> before smoothing, 2.5D before 3D — is deliberate and should be preserved.
 
 > **Working mode: design first.** In each phase, the *model* (the math, the
 > config, the invariants) is specified in `docs/` and locked in an ADR *before*
@@ -40,45 +41,55 @@ G-code.
 
 ---
 
-## Phase 2 — Real 2D: import, compensation, climb/conventional
+## Phase 2 — Real 2D: import, compensation, climb/conventional ✅ (v0.2)
 
 Goal: machine a real part's 2D features correctly.
 
 **Slice status (F→L):** F `toolpath.Loop` ✅ · G `planning` (milling mode,
 orientation, keep-out entry) ✅ · H `safety` envelope gate ✅ · I `stock`
 model ✅ · J `mesh` (STL ASCII/binary, 3MF, `Slice(z)`) ✅ · K `part` recipe +
-planner composition ◀ next · L CLI `generate` (`moves.Program` +
-`gcode.EmitProgram` still to build).
+planner composition ✅ · L CLI `generate` (`moves.Program` +
+`gcode.EmitProgram`) ✅ — **all slices done**.
 
-- [ ] **Part import:** STL and 3MF (triangle mesh) importers that normalise into
-      the canonical frame (ADR-001) and extract 2D contours (planar face
-      detection). B-rep import is a separate, higher-effort effort — defer to a
-      later phase and treat mesh as the v1 input.
-- [ ] **Stock:** box + common solids (cylinder, prism) as the material block;
-      stock-vs-part boolean to find what to remove.
-- [ ] **Cutter compensation** (ADR-013; [cutter-compensation.md](cutter-compensation.md)):
+- [x] **Part import:** STL (ASCII + binary) and 3MF (triangle mesh) importers
+      that normalise into the canonical frame (ADR-001) with `Slice(z)` section
+      extraction (ADR-017; [part.md](part.md)). B-rep import is a separate,
+      higher-effort effort — deferred (see below) and mesh is the v1 input.
+- [x] **Stock:** box + common solids (cylinder, prism) as the material block,
+      with `SectionAt`/`TopAt`/`Contains`/`Fits` (ADR-015) so the fit gate and
+      the Z model read the real stock, not a proxy.
+- [x] **Cutter compensation** (ADR-013;
+      [cutter-compensation.md](cutter-compensation.md)):
       a dedicated, composable `comp` module — outside/inside offset, mitre/chamfer/
       fillet joins, and a **safe-by-construction** guarantee (self-intersection is
       trimmed, *never* over-cut; unreachable features are reported). Built in the
       documented, test-per-step order (per-edge offset → joins → assemble+trim →
       diagnostics → compose with profile/pocket).
-- [ ] **Climb/conventional:** the planner chooses the milling mode per contour
+- [x] **Climb/conventional:** the planner chooses the milling mode per contour
       (rotation + travel + material side) **before generation** and fixes the
       traversal direction that achieves it (ADR-009); global / per-operation /
       per-path overrides (ADR-005).
-- [ ] **Keep-out routing (ADR-012):** planning routes entry/exit/retracts and
+- [x] **Keep-out routing (ADR-012):** planning routes entry/exit/retracts and
       passes around the fixture's keep-out volumes (clamps, vise jaws) so the
-      tool envelope never enters them — a hard constraint, verified, not hoped.
-- [ ] **Operation planner (first cut):** map `part + stock + fixture + tool`
-      to an ordered list of operations (profile/pocket/face) and strategies.
-- [ ] **Config loading in the CLI:** `cleancuts generate --part … --stock …
-      --fixture … --tool … --machine …` producing `.moves.json` and `.nc`.
+      tool envelope never enters them — a hard constraint, verified by the
+      `safety` gate, not hoped; entry vertices clear keep-outs over the whole
+      plunge column (ADR-018 §4).
+- [x] **Operation planner (first cut):** `planner.Plan` maps
+      `part + stock + fixture + tool + machine` to an ordered list of verified
+      paths (profile/pocket by nesting parity, ADR-018); process values are
+      *refused, not clamped* (feed/spindle/flute/coolant/milling validated).
+- [x] **Config loading in the CLI:** `cleancuts generate --part … --stock …
+      --fixture … --tool … --machine …` producing `.moves.json` and `.nc`
+      (ADR-019 §5); inch machines are refused up front (v1 plans in mm only).
 
-**Exit criterion:** import a real STL part, plan its 2D features, offset by a
-real tool, apply the correct milling mode, route around the declared keep-out
-volumes, and emit G-code that a simulator (or the friend's machine dry-run)
-accepts without
-crashing — with the intermediate `.moves.json` inspectable.
+**Exit criterion (met):** the example STL part (60×40×10 plate with a centred
+20×20 through-hole) imports, plans its 2D features (profile CW + pocket CCW,
+both climb), offsets by a real 10 mm 4-flute endmill, routes around declared
+keep-outs (verified — a clamping jaw that intersects the path is refused with a
+precise message), and emits clean G-code (`X-5`, not `X-5.000000000000002`) —
+with the intermediate `.moves.json` inspectable. Final dry-run on a simulator
+or the friend's machine is the remaining real-world check (Phase 3 will
+exercise it with the clearing strategies).
 
 ---
 
@@ -205,3 +216,7 @@ Goal: a nice face on the core.
   at the import boundary** rather than build one — which fits our "boundary module
   normalises into the canonical frame" design (ADR-001) and keeps the core
   dependency-free. For now, high-quality mesh in is the right call.
+- **Inch machines.** v1 plans in millimetres only and the planner refuses
+  `units: "inch"` machines (ADR-001 — units mapping is a post-processing
+  concern; emitting G20 over mm numbers would scale the program 25.4×).
+  The `linuxcnc-3axis.json` example stays as a dialect reference.

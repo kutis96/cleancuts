@@ -13,11 +13,13 @@ tested core** that can later be wrapped by a CLI (today) and a WASM-based GUI
 hand off to both humans and AI agents — the two things that have historically
 lacked in the open-source CAM space.
 
-> **Status:** v0.1 — foundation scaffold. A working, tested core (geometry
-> kernel, toolpath format, toolpath generator, generic G-code emitter, tool and
-> machine config) plus the architecture and design decisions. Real part
-> import, cutter compensation, and adaptive/trochoidal strategies arrive in
-> later phases (see [Roadmap](docs/roadmap.md)).
+> **Status:** v0.2 — the 2.5D core is complete. Import a part (STL/3MF),
+> a stock block, a fixture, a tool, and a machine (all portable JSON), and
+> `cleancuts generate` plans the 2D features — profile and pocket in the
+> correct climb direction, offset by the tool, verified against keep-out
+> zones — and emits inspectable `.moves.json` plus G-code. Adaptive/
+> trochoidal strategies, smoothing, and 3D arrive in later phases (see
+> [Roadmap](docs/roadmap.md)).
 
 ---
 
@@ -90,13 +92,21 @@ or a post-processor (generic → GRBL) never forces a change in the others.
 
 | Package | Responsibility |
 |---|---|
-| [`internal/kernel`](internal/kernel) | Dependency-free geometry and math: vectors, points, lines, arcs, intersections. The single source of truth for coordinates. |
-| [`internal/moves`](internal/moves) | The machine-independent toolpath format (Move / Path) and its invariants. |
-| [`internal/toolpath`](internal/toolpath) | Generates `moves.Path` from geometry (v0.1: 2D profile). |
-| [`internal/gcode`](internal/gcode) | Generic G-code emitter and arc tessellation. |
+| [`internal/kernel`](internal/kernel) | Dependency-free geometry and math: vectors, points, lines, arcs, intersections, containment. The single source of truth for coordinates. |
+| [`internal/moves`](internal/moves) | The machine-independent toolpath format (Move / Path / **Program**) and its invariants. |
+| [`internal/mesh`](internal/mesh) | STL (ASCII + binary) and 3MF import; `Slice(z)` section extraction (ADR-017). |
+| [`internal/part`](internal/part) | The part recipe (JSON) and feature detection by nesting parity (profile/pocket, ADR-018). |
+| [`internal/stock`](internal/stock) | The stock model (box, cylinder, prism): `SectionAt`/`TopAt`/`Contains`/`Fits` (ADR-015). |
+| [`internal/fixture`](internal/fixture) | Portable workholding (keep-out zones) mapped to planning (ADR-019 §3). |
+| [`internal/comp`](internal/comp) | 2D offset / cutter compensation: joins, assemble+trim, safe-by-construction (ADR-013). |
+| [`internal/planning`](internal/planning) | Per-feature planning: milling mode, orientation, keep-out entry (ADR-009, ADR-016/018). |
+| [`internal/planner`](internal/planner) | The first-cut planner: part+stock+fixture+tool+machine → ordered, verified paths (ADR-018/019). |
+| [`internal/safety`](internal/safety) | The tool-envelope safety gate against keep-out zones (ADR-012). |
+| [`internal/toolpath`](internal/toolpath) | Generates `moves.Path` from geometry (2D profile loop). |
+| [`internal/gcode`](internal/gcode) | Generic G-code emitter (path + program) with coordinate formatting and arc tessellation. |
 | [`internal/tool`](internal/tool) | Portable tool model + library (JSON). |
 | [`internal/machine`](internal/machine) | Portable machine + post-processor config (JSON). |
-| [`cmd/cleancuts`](cmd/cleancuts) | The CLI entry point (version, demo). |
+| [`cmd/cleancuts`](cmd/cleancuts) | The CLI entry point (`version`, `demo`, **`generate`**). |
 
 Full design rationale: [Architecture](docs/architecture.md) ·
 [Design decisions (ADRs)](docs/design-decisions.md) ·
@@ -120,6 +130,24 @@ go run ./cmd/cleancuts demo        # generate a sample 2D profile as G-code
 go run ./cmd/cleancuts demo --no-arms   # same, but arcs tessellated to G1
 ```
 
+**Plan a real part** (the Phase 2 workflow) — part, stock, tool, and machine
+are all portable JSON (see `schemas/` and `examples/`):
+
+```sh
+go run ./cmd/cleancuts generate \
+  --part examples/parts/plate_60x40x10_hole20.json \
+  --stock examples/stock/block_120x80x20.json \
+  --tool examples/tools/library.json --tool-id endmill-10mm-4f \
+  --machine examples/machines/grbl_3axis.json \
+  --coolant flood --feed 500 --spindle 8000 \
+  --out plate.moves.json --nc plate.nc
+```
+
+That prints a short plan summary, writes `plate.moves.json` (the inspectable
+machine-independent intermediate — the seam you can edit and re-post), and
+`plate.nc` (generic G-code). Add `--fixture examples/fixture/clamp_setup.json`
+to declare keep-out zones; the planner refuses to route through them.
+
 Or use the Makefile:
 
 ```sh
@@ -132,18 +160,28 @@ make build test vet fmt
 
 ```
 cleancuts/
-├── cmd/cleancuts/          # CLI entry point
-├── internal/
+├── cmd/cleancuts/          # CLI entry point (version, demo, generate)
+├── internal/               # 14 packages, all stdlib-only
 │   ├── kernel/             # geometry + math core (no external deps)
-│   ├── moves/              # machine-independent toolpath format
-│   ├── toolpath/           # toolpath generation (2D profile in v0.1)
-│   ├── gcode/              # generic G-code emitter + arc tessellation
+│   ├── moves/              # machine-independent toolpath format (Move/Path/Program)
+│   ├── mesh/               # STL/3MF import + Slice(z)
+│   ├── part/               # part recipe + feature detection
+│   ├── stock/              # stock model (box/cylinder/prism)
+│   ├── fixture/            # workholding → keep-out zones
+│   ├── comp/               # 2D offset / cutter compensation
+│   ├── planning/           # milling mode, orientation, keep-out entry
+│   ├── planner/            # first-cut planner (the composition)
+│   ├── safety/             # tool-envelope gate vs. keep-outs
+│   ├── toolpath/           # toolpath generation (2D profile loop)
+│   ├── gcode/              # generic G-code emitter (path + program)
 │   ├── tool/               # portable tool model + library (JSON)
 │   └── machine/            # portable machine config (JSON)
-├── schemas/                # JSON schemas for tool / machine / moves
-├── examples/               # example tools, machines, and toolpaths
+├── schemas/                # JSON schemas (tool, machine, moves, part, stock, fixture)
+├── examples/               # example parts, stock, tools, machines, fixtures
 ├── docs/                   # architecture, ADRs, parameters, roadmap
+├── issues/                 # bug + doc-drift tracker (open/ and closed/)
 ├── AGENTS.md               # working agreement for AI agents (and humans)
+├── HANDOVER.md             # session-state snapshot for context resets
 ├── Makefile
 └── go.mod
 ```

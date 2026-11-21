@@ -38,7 +38,7 @@ Common fields:
 
 One **continuous** chain of moves (one pass of one feature). Invariant: each
 move's `from` equals the previous move's `to`. Multiple features = multiple
-`Path`s (later grouped by a program type).
+`Path`s, grouped by a `Program`.
 
 | Field | JSON | Meaning |
 |---|---|---|
@@ -51,12 +51,33 @@ move's `from` equals the previous move's `to`. Multiple features = multiple
 | `metadata` | `metadata` | Free-form bag: strategy name, per-segment engagement, model version, … |
 | `created_at` | `created_at` | Generation timestamp (informational). |
 
+### `Program` (ADR-019)
+
+An **ordered, addressable** list of `Path`s — the unit `cleancuts generate`
+writes to `.moves.json` and `gcode.EmitProgram` emits. Invariants:
+
+- `id` required; `paths` non-empty.
+- **Path IDs are unique** — each path is addressable (a future GUI can select
+  and override one; a post-processor can emit or skip one).
+- The inter-feature **link rapids are first-class paths** (their own ID, e.g.
+  `link-1`): the planner inserts them between features, *verified against the
+  keep-out zones at construction* (a zero-length link is omitted rather than
+  emitted). Linking is data, not emitter logic.
+
+| Field | JSON | Meaning |
+|---|---|---|
+| `id` | `id` | Program identifier (required). |
+| `name` | `name` | Human name (emitted as a header comment). |
+| `paths` | `paths` | The ordered `Path`s (unique IDs). |
+
 ### Why this shape
 
 - **Explicit, stable JSON** (lowercase snake_case) that is easy to diff, edit,
   and version. See `schemas/moves.schema.json`.
-- **Analytic moves** (ADR-002): arcs are arcs, not polylines. Tessellation is a
-  post-processing choice.
+- **Analytic moves** (ADR-002): arcs are arcs, not polylines. Tessellation and
+  **coordinate formatting are post-processing choices** — the intermediate JSON
+  keeps the core's float64 values verbatim (so an editor sees the exact geometry
+  and can re-emit at any precision).
 - **Decisions are data** (ADR-005): climb/conventional, feed, coolant, and
   strategy context are all *visible and editable* here.
 - **Many consumers, one source:** the generic emitter, machine-specific
@@ -93,16 +114,26 @@ Two concerns, kept separate:
 
 ### 1. Generic emission (`internal/gcode`)
 
-The default post-processor turns a `moves.Path` into dialect-neutral G-code:
+The default post-processor turns a `moves.Program` (or a single `moves.Path`
+via `Emit`) into dialect-neutral G-code:
 
-- Spindle/coolant setup from the moves (max spindle → `S…`, `M3`; coolant → `M8`).
+- **One header:** spindle = the max across all paths (`S…`, `M3`), coolant on
+  if any path wants it (`M8`).
+- **The paths in order**, each under a `; name` comment; a link path emits like
+  any other (its moves are just moves).
 - Each move → `G0`/`G1`/`G2`/`G3` with `X Y Z`, `F`, and (arcs) `I J` (centre
   offsets relative to the arc start — the most widely supported arc format).
-- Program end (`M9`, `M5`, `M2`).
+- **One footer:** coolant off (`M9`), spindle off (`M5`), program end (`M2`).
 
 Configurable via `gcode.Options`:
 - `use_arms` — emit G2/G3 (default) or tessellate to G1.
 - `arc_tol_deg` — max segment angle when tessellating.
+- **`coord_precision`** — decimal places for coordinates (default 4 = 1 µm),
+  trailing zeros trimmed, `-0` normalised to `0`. This is where the core's
+  float64 ulps are absorbed: an offset corner that is `-5.000000000000002`
+in the intermediate format emits as `X-5`. G-code is a decimal text protocol
+  for machines with finite resolution, so formatting is a post-processing
+  concern (ADR-002), not a core-geometry change.
 - `comment_prefix`, and the M-codes (`spindle_start/stop`, `program_end`,
   `coolant_on/off`).
 
@@ -113,6 +144,10 @@ varies *only* the dialect and framing, never the geometry:
 
 - `dialect` (`grbl`, `linuxcnc`, `fanuc`, `generic`).
 - `units` (`mm` / `inch`) — the *only* place units conversion happens (ADR-001).
+  **v1 note:** the core plans in millimetres only, and the planner refuses
+  `units: "inch"` machines up front — emitting G20 over mm numbers would scale
+  the program 25.4× (over-cut), and comparing mm process values against inch
+  limits is a category error. Inch support is deferred (roadmap).
 - `axes` — letters, travel, max feed/rapid (for bounds checks and lookahead).
 - `spindle_rotation` — `ccw` (default) or `cw`, viewed from above; planning uses
   it to derive climb/conventional traversal (ADR-005, ADR-009).

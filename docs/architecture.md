@@ -44,11 +44,12 @@ state.
   (slicing strictly between `VertexZs()` levels; the coplanar case is refused
   with a precise error rather than a silent polygon-boolean). File I/O stays in
   the CLI. See [mesh.md](mesh.md).
-- **Feature planning** (detecting pockets, profiles, faces; deciding which
-  operation applies where) is a stage that will sit on top of the kernel plus the
-  imported part/stock geometry. In v0.1 the "feature" is implicit (the caller
-  supplies the contour), so this stage is not yet a separate package. See the
-  roadmap for when it becomes one.
+- **`internal/part`** is the feature stage (ADR-018): a portable part **recipe**
+  (JSON — `id/name/mesh/slice_z/cut_z`) over the imported mesh, and **feature
+  detection by nesting parity** — an even nesting depth is a material contour
+  (profile), an odd depth a void contour (pocket), so one rule covers
+  profiles, holes, and islands. Intersecting section loops are refused (Law 7).
+  See [part.md](part.md).
 
 ### Stage 1.5 — Planning (operation, strategy, milling mode, direction, passes)
 
@@ -67,13 +68,22 @@ generation then executes (ADR-009):
 - **Feed/speed intent:** resolve the tool's `feeds[]` + `max_rpm` into target
   spindle/feed, to be clamped by the machine limits (ADR-010).
 
-**Phase 2 (in progress):** the dedicated planner package
-**`internal/planning`** implements the milling-mode half of this stage: it
-derives the climb/conventional decision from feature kind + spindle rotation
-(`spindle_rotation` in the machine config), orients the contour to achieve it,
-and picks a start vertex outside the keep-out zones (hard constraint). Its
-model is in [planning.md](planning.md). Still to come: strategy selection,
-pass structure, feed/speed resolution, and entry/approach vectors.
+**Phase 2 (done):** **`internal/planning`** implements the milling-mode half of
+this stage: it derives the climb/conventional decision from feature kind +
+spindle rotation (`spindle_rotation` in the machine config), orients the contour
+to achieve it, and picks a start vertex that clears the keep-out zones over the
+whole plunge column (hard constraint, `PickStartBetween`, ADR-018 §4). Its model
+is in [planning.md](planning.md). **`internal/planner`** is the first-cut
+composition (ADR-018): part + stock + fixture + tool + machine → the Z model
+(slice/cut/safe heights), feature detection, `comp.Offset` per feature,
+`planning.PlanFeature`, `toolpath.Loop`, and the `safety` gate — every refusal
+precise and named, nothing clamped. **`internal/moves`** carries the result as
+an ordered, addressable **`Program`** with unique path IDs (ADR-019), including
+the inter-feature link rapids as first-class, verified paths.
+
+Still to come (phases 3–4): strategy selection (trochoidal/adaptive), pass
+structure, feed/speed resolution from the tool's `feeds[]`, and approach
+vectors.
 
 ### Stage 2 — Toolpath generation
 
@@ -137,17 +147,23 @@ collision check consume, and the unit a shop keeps and moves.
 
 ## Data flow, concretely
 
-A v0.1 program does the following, and each step is independently testable:
+`cleancuts generate` runs the following, and each step is independently testable:
 
-1. The caller defines a part contour (`[]kernel.Point2`) and a `toolpath.ProfileParams`.
-2. `toolpath.Profile` builds a `moves.Path`: one rapid plunge, one linear move
-   per edge (all at `CutZ`), one rapid retract. It validates the result before
-   returning.
-3. `gcode.Emit` reads the `moves.Path`, validates it again (defence in depth), and
-   renders G-code: spindle/coolant setup, the moves (G2/G3 arcs or tessellated G1),
-   and program-end codes.
+1. The CLI loads the setup — part recipe, mesh (STL/3MF), stock, fixture, tool,
+   machine — all portable JSON, all `Validate()`d (I/O lives in the CLI only).
+2. `mesh.Slice(z)` extracts the section at `slice_z`; `part.Detect` assigns
+   nesting parity (profile/pocket) and refuses intersecting loops.
+3. For each feature: `comp.Offset` (tool radius, inside/outside by kind) →
+   `planning.PlanFeature` (milling mode + orientation + keep-out-safe entry) →
+   `toolpath.Loop` (plunge, one analytic move per edge, retract) →
+   `safety.CheckPath` (envelope vs. keep-outs).
+4. `planner.ToProgram` orders the paths, inserts the inter-feature link rapids
+   (verified against keep-outs at construction), and returns a `moves.Program`.
+5. `gcode.EmitProgram` validates again (defence in depth) and renders G-code:
+   one header (spindle = max across paths, coolant if any path wants it), the
+   paths in order, one footer (M9 → M5 → M2), coordinates at fixed precision.
 
-The same `moves.Path` could instead be:
+The same `moves.Program` could instead be:
 - serialised to JSON and inspected/edited by a user, or
 - fed to a machine-specific post-processor, or
 - rendered by the (future) GUI.
@@ -161,30 +177,34 @@ depends only on `kernel` and, at most, the formats it produces/consumes.** There
 are no cycles and no "god packages."
 
 ```
-        ┌─────────────────────────────┐
-        │          kernel             │   (no internal deps)
-        └─────────────────────────────┘
-              ▲      ▲      ▲
-              │      │      │
-        ┌─────────┐ ┌────────┐ ┌────────────┐
-        │  moves  │ │ tool   │ │  machine   │   (depend on kernel only)
-        └─────────┘ └────────┘ └────────────┘
-              ▲
-              │
-        ┌──────────────────────────┐
-        │  toolpath                │   (produces moves)
-        └──────────────────────────┘
-              ▲
-              │
-        ┌──────────────────────────┐
-        │  gcode                   │   (consumes moves)
-        └──────────────────────────┘
-              ▲
-              │
-        ┌──────────────────────────┐
-        │  cmd/cleancuts           │   (CLI)
-        └──────────────────────────┘
+  kernel ───────────────────────────────────────────────────────── (no internal deps)
+   ▲  ▲  ▲  ▲  ▲  ▲  ▲
+   │  │  │  │  │  │  │
+   │  │  │  │  │  │  machine
+   │  │  │  │  │  stock
+   │  │  │  │  mesh
+   │  │  │  part ──────► (kernel + moves for feature kinds)
+   │  │  │  comp
+   │  │  fixture ──────► (kernel + planning.KeepOut)
+   │  │  planning ─────► (kernel)
+   │  safety ──────────► (kernel + moves)
+   │  moves ───────────► (kernel)
+   │  tool ────────────► (kernel)
+   │
+   │  toolpath ────────► (kernel + moves; produces moves.Path)
+   │       ▲
+   │   planner ────────► (the composition: part, stock, fixture, planning,
+   │       ▲              comp, safety, toolpath, moves, kernel)
+   │   gcode ───────────► (kernel + moves; consumes moves.Program)
+   │
+   cmd/cleancuts ──────► (the CLI — where I/O lives; depends on everything)
 ```
+
+Read it bottom-up: **`kernel` is the only ground; every package depends only
+on `kernel` and at most the formats it produces/consumes; `planner` is the
+composition stage and nothing depends on it except the CLI.** The `demo`
+command uses the short `toolpath → moves → gcode` path; `generate` runs the
+full `mesh/part → comp/planning/toolpath/safety → planner → moves → gcode` path.
 
 ## Error-handling contract
 
@@ -257,11 +277,16 @@ See [surface-quality.md](surface-quality.md) for the surface-finish model and
 
 ## What is deliberately NOT in the core (yet)
 
-- Part import (STL/3MF/B-rep) — a boundary module that normalises into the
-  canonical frame (ADR-001) and hands geometry to the pipeline. Roadmap phase 2.
-- Full 2D offset / cutter compensation with robust corner joins. Phase 2.
 - Adaptive/trochoidal, constant-chip-load, and jerk-limited feed scheduling.
   Phases 3–4 (see [operations.md](operations.md)).
+- Multi-pass Z scheduling (rough → finish passes, per-feature top Z, finishing
+  allowance) — the first-cut planner is single-depth by design (ADR-018);
+  this is phase 3/4 territory.
+- Inch-unit machines — v1 plans in mm only and refuses `units: "inch"`
+  (ADR-001; emitting G20 over mm numbers would scale the program 25.4×).
 - The WASM GUI. A separate effort that consumes the `moves` format.
+
+(Already done, for the record: part import via `mesh`/`part` — ADR-017/018;
+2D offset / cutter compensation with corner joins — `comp`, ADR-013.)
 
 These are all *additions to the pipeline*, not changes to its spine.
