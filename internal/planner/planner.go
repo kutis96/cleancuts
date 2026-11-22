@@ -20,6 +20,7 @@ package planner
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/kutis96/cleancuts/internal/comp"
@@ -278,21 +279,200 @@ func Plan(p Params) (Result, error) {
 		label = p.Part.ID
 	}
 	out := Result{SliceZ: sliceZ, CutZ: cutZ, SafeZ: safeZ}
-	for _, f := range features {
-		// ADR-021: a Boss is kept material — it is never milled. In profile
-		// mode it is simply not a feature to cut; in pocket mode it is the
-		// keep-out obstacle the region clears around (ADR-022/026).
-		if f.Kind == planning.Boss {
-			continue
-		}
-		if err := planFeature(p, &out, f, mode, coolant, safeZ, cutZ, label); err != nil {
+	op := p.Part.Operation
+	if op == "" {
+		op = part.OpProfile
+	}
+	switch op {
+	case part.OpPocket:
+		if err := planPockets(p, sliceZ, features, &out, mode, coolant, safeZ, cutZ, label); err != nil {
 			return Result{}, err
+		}
+	default:
+		for _, f := range features {
+			// ADR-021: a Boss is kept material — it is never milled. In
+			// profile mode it is simply not a feature to cut.
+			if f.Kind == planning.Boss {
+				continue
+			}
+			if err := planFeature(p, &out, f, mode, coolant, safeZ, cutZ, label); err != nil {
+				return Result{}, err
+			}
 		}
 	}
 	if err := out.Validate(); err != nil {
 		return Result{}, fmt.Errorf("planner: produced an invalid result: %w", err)
 	}
 	return out, nil
+}
+
+// planPockets runs the pocket branch (ADR-022, ADR-026, ADR-028): for each
+// depth-0 feature, clear the region (the outer loop minus the kept nested
+// loops) down to cut_z with the trochoidal raster. Valid on a face section
+// only — on a band section the region is solid material and clearing it
+// would cut through the part (a precise refusal, Law 7).
+func planPockets(
+	p Params,
+	sliceZ float64,
+	features []part.Feature,
+	out *Result,
+	mode moves.Milling,
+	coolant moves.Coolant,
+	safeZ, cutZ float64,
+	label string,
+) error {
+	// Face section only (ADR-026): on a band section the region is solid
+	// material — clearing it destroys the part.
+	onFace := false
+	for _, lv := range p.Mesh.VertexZs() {
+		if math.Abs(sliceZ-lv) <= kernel.AbsTol {
+			onFace = true
+			break
+		}
+	}
+	if !onFace {
+		return fmt.Errorf("planner: operation \"pocket\" needs a face section, but slice_z %g is a band height (the part's vertex heights are %v) — the region there is solid material and clearing it would cut through the part; set slice_z to a face height (one of the vertex levels)", sliceZ, p.Mesh.VertexZs())
+	}
+
+	R := p.Tool.Radius()
+	s := R
+	if p.Part.Stepover != nil {
+		s = *p.Part.Stepover
+	}
+	if s > 2*R+kernel.AbsTol {
+		return fmt.Errorf("planner: stepover %g exceeds 2x the tool %q radius (%g mm) — the pocket rows would not overlap and the region would not be covered; lower the stepover or use a larger tool", s, p.Tool.ID, R)
+	}
+	// The feed that actually runs on every pocket cutting move (ADR-022)
+	// must respect the machine minimum — refused, not clamped (ADR-018 §5).
+	aE, err := toolpath.Engagement(R, s)
+	if err != nil {
+		return fmt.Errorf("planner: %v", err)
+	}
+	feedCut, err := toolpath.ChipLoadFeed(p.Feed, aE, 2*R)
+	if err != nil {
+		return fmt.Errorf("planner: %v", err)
+	}
+	if p.Machine.MinFeed > 0 && feedCut < p.Machine.MinFeed {
+		return fmt.Errorf("planner: the pocket's chip-load feed %g mm/min (full feed %g scaled by sqrt(a_e/D), a_e=%g) is below the machine %q minimum %g — raise the feed, lower the stepover, or use a smaller tool", feedCut, p.Feed, aE, p.Machine.ID, p.Machine.MinFeed)
+	}
+
+	for _, f := range features {
+		if f.Depth != 0 {
+			continue // only depth-0 loops bound a clearable region
+		}
+		// Kept nested loops (ADR-021, ADR-028): a Boss (material above the
+		// section) and a blind void (material below in its column — a kept
+		// floor). A through-void (an empty column) is air — part of the
+		// cleared region.
+		var kept []part.Feature
+		for _, g := range features {
+			if g.Parent != f.Index || g.Depth != 1 {
+				continue
+			}
+			if g.Kind == planning.Boss {
+				kept = append(kept, g)
+				continue
+			}
+			if g.Kind == planning.Pocket {
+				var inners []kernel.Chain2
+				for _, h := range features {
+					if h.Parent == g.Index {
+						inners = append(inners, h.Contour)
+					}
+				}
+				bottomZ, has, err := p.Mesh.RegionBottomZ(g.Contour, inners)
+				if err != nil {
+					return fmt.Errorf("planner: %s (blind-floor test): %v", g, err)
+				}
+				if has && bottomZ < sliceZ-kernel.AbsTol {
+					kept = append(kept, g) // a blind floor — kept material
+				}
+			}
+		}
+
+		region, rdiags, err := offsetLargest(f.Contour, comp.Inside, R, p.Tool.ID, f)
+		if err != nil {
+			return err
+		}
+		out.Diagnostics = append(out.Diagnostics, rdiags...)
+
+		var bosses []kernel.Chain2
+		for _, k := range kept {
+			b, bdiags, err := offsetLargest(k.Contour, comp.Outside, R, p.Tool.ID, k)
+			if err != nil {
+				return err
+			}
+			out.Diagnostics = append(out.Diagnostics, bdiags...)
+			bosses = append(bosses, b)
+		}
+
+		path, pdiags, err := toolpath.Pocket(toolpath.PocketParams{
+			Operation: "pocket",
+			Name:      fmt.Sprintf("%s — pocket %d", label, f.Index),
+			ToolID:    p.Tool.ID,
+			Milling:   mode,
+			FeedFull:  p.Feed,
+			Spindle:   p.Spindle,
+			Coolant:   coolant,
+			SafeZ:     safeZ,
+			CutZ:      cutZ,
+			Radius:    R,
+			Stepover:  s,
+			Region:    region,
+			Bosses:    bosses,
+		})
+		if err != nil {
+			return fmt.Errorf("planner: %s (pocket): %v", f, err)
+		}
+		for _, d := range pdiags {
+			out.Diagnostics = append(out.Diagnostics, Diagnostic{Level: d.Level, Feature: f.Index, Message: d.Message})
+		}
+		path.ID = fmt.Sprintf("pocket-%d", f.Index)
+		// The fixture gate (ADR-012) on the whole path — including the
+		// plunge columns, which the gate tests as points through Z.
+		if err := safety.CheckPath(path, R, p.KeepOuts); err != nil {
+			return fmt.Errorf("planner: %s (pocket): %v", f, err)
+		}
+		out.Features = append(out.Features, FeaturePath{
+			Feature: f,
+			Path:    path,
+			Entry:   kernel.P2(path.Moves[0].From.X, path.Moves[0].From.Y),
+		})
+	}
+	return nil
+}
+
+// offsetLargest offsets a contour by r on the requested side and keeps the
+// largest resulting chain (the offset of a simple loop is one loop; a split
+// is residual — the safe side, ADR-013 — reported, not silently dropped).
+func offsetLargest(c kernel.Chain2, dir comp.Direction, r float64, toolID string, f part.Feature) (kernel.Chain2, []Diagnostic, error) {
+	res, err := comp.Offset(c, comp.Options{Radius: r, Direction: dir})
+	if err != nil {
+		return kernel.Chain2{}, nil, fmt.Errorf("planner: %s cannot be offset (%s) with tool %q (radius %g mm): %v — choose a smaller tool or change the setup", f, dir, toolID, r, err)
+	}
+	diags := make([]Diagnostic, 0, len(res.Diagnostics))
+	for _, d := range res.Diagnostics {
+		diags = append(diags, Diagnostic{Level: d.Level, Feature: f.Index, Message: d.Message})
+	}
+	if len(res.Chains) == 0 {
+		detail := "the tool does not fit"
+		for _, d := range res.Diagnostics {
+			detail = d.Message
+			break
+		}
+		return kernel.Chain2{}, nil, fmt.Errorf("planner: %s is unreachable with tool %q (radius %g mm): %s — choose a smaller tool or change the setup", f, toolID, r, detail)
+	}
+	best := res.Chains[0]
+	for _, ch := range res.Chains[1:] {
+		if math.Abs(ch.SignedArea()) > math.Abs(best.SignedArea()) {
+			best = ch
+		}
+	}
+	if len(res.Chains) > 1 {
+		diags = append(diags, Diagnostic{Level: "warning", Feature: f.Index,
+			Message: fmt.Sprintf("offset split into %d chains; the largest is used, the rest are residual material (the safe side)", len(res.Chains))})
+	}
+	return best, diags, nil
 }
 
 // planFeature runs the per-feature pipeline for one feature and appends the

@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/kutis96/cleancuts/internal/planning"
 	"github.com/kutis96/cleancuts/internal/stock"
 	"github.com/kutis96/cleancuts/internal/tool"
+	"github.com/kutis96/cleancuts/internal/toolpath"
 )
 
 // --- fixtures -----------------------------------------------------------
@@ -766,4 +768,394 @@ func TestResultValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- pocket (ADR-022, ADR-026, ADR-027, ADR-028) ---------------------------
+
+// smallEndmill is a Ø0.5 2-flute endmill (R = 0.25) for the small fixtures.
+func smallEndmill() tool.Tool {
+	return tool.Tool{
+		ID:          "endmill-0.5mm-2f",
+		Kind:        tool.KindFlatEndMill,
+		Diameter:    0.5,
+		Flutes:      2,
+		FluteLength: 10,
+		MaxRPM:      20000,
+	}
+}
+
+// tube2 is a 2×2×1 plate with a 1×1 centred through-hole (z 0..1).
+func tube2() mesh.Mesh {
+	v := []kernel.Point3{
+		kernel.P3(0, 0, 0), kernel.P3(2, 0, 0), kernel.P3(2, 2, 0), kernel.P3(0, 2, 0),
+		kernel.P3(0, 0, 1), kernel.P3(2, 0, 1), kernel.P3(2, 2, 1), kernel.P3(0, 2, 1),
+		kernel.P3(0.5, 0.5, 0), kernel.P3(1.5, 0.5, 0), kernel.P3(1.5, 1.5, 0), kernel.P3(0.5, 1.5, 0),
+		kernel.P3(0.5, 0.5, 1), kernel.P3(1.5, 0.5, 1), kernel.P3(1.5, 1.5, 1), kernel.P3(0.5, 1.5, 1),
+	}
+	t := []mesh.Tri{
+		tri(0, 1, 5), tri(0, 5, 4), tri(6, 2, 3), tri(7, 6, 3), tri(7, 3, 0), tri(4, 7, 0), tri(1, 2, 6), tri(1, 6, 5),
+		tri(8, 11, 15), tri(8, 15, 12), tri(14, 10, 9), tri(13, 14, 9), tri(13, 9, 8), tri(12, 13, 8),
+		tri(11, 10, 14), tri(11, 14, 15),
+		tri(4, 5, 13), tri(4, 13, 12), tri(5, 6, 14), tri(5, 14, 13), tri(6, 7, 15), tri(6, 15, 14), tri(7, 4, 12), tri(7, 12, 15),
+		tri(9, 1, 0), tri(8, 9, 0), tri(10, 2, 1), tri(9, 10, 1), tri(11, 3, 2), tri(10, 11, 2), tri(8, 0, 3), tri(11, 8, 3),
+	}
+	return mesh.Mesh{Vertices: v, Triangles: t}
+}
+
+// recessPlate is a 4×4×1 plate (z 0..1) with a 1×1 recess [1.5,2.5]² cut
+// into the top, floor at z=0.5 — a blind void at the top face (ADR-028).
+func recessPlate() mesh.Mesh {
+	v := []kernel.Point3{
+		kernel.P3(0, 0, 0), kernel.P3(4, 0, 0), kernel.P3(4, 4, 0), kernel.P3(0, 4, 0),
+		kernel.P3(0, 0, 0.5), kernel.P3(4, 0, 0.5), kernel.P3(4, 4, 0.5), kernel.P3(0, 4, 0.5),
+		kernel.P3(1.5, 0.5, 0.5), kernel.P3(2.5, 0.5, 0.5), kernel.P3(2.5, 2.5, 0.5), kernel.P3(1.5, 2.5, 0.5),
+		kernel.P3(0, 0, 1), kernel.P3(4, 0, 1), kernel.P3(4, 4, 1), kernel.P3(0, 4, 1),
+		kernel.P3(1.5, 0.5, 1), kernel.P3(2.5, 0.5, 1), kernel.P3(2.5, 2.5, 1), kernel.P3(1.5, 2.5, 1),
+	}
+	t := []mesh.Tri{
+		// bottom (−z)
+		tri(0, 2, 1), tri(0, 3, 2),
+		// outer walls (full height)
+		tri(0, 1, 13), tri(0, 13, 12),
+		tri(14, 2, 3), tri(15, 14, 3),
+		tri(0, 15, 3), tri(0, 12, 15),
+		tri(1, 2, 14), tri(1, 14, 13),
+		// recess floor (+z) at z=0.5 — the kept material a blind void has
+		tri(8, 9, 10), tri(8, 10, 11),
+		// top annulus (+z) at z=1
+		tri(12, 13, 17), tri(12, 17, 16),
+		tri(13, 14, 18), tri(13, 18, 17),
+		tri(14, 15, 19), tri(14, 19, 18),
+		tri(15, 12, 16), tri(15, 16, 19),
+		// recess walls (normals into the recess, toward (2,2))
+		tri(8, 11, 19), tri(8, 19, 16),
+		tri(10, 9, 17), tri(10, 17, 18),
+		tri(9, 8, 16), tri(9, 16, 17),
+		tri(11, 10, 18), tri(11, 18, 19),
+	}
+	return mesh.Mesh{Vertices: v, Triangles: t}
+}
+
+func pocketStock(mn, mx kernel.Point3) stock.Stock {
+	return stock.Stock{ID: "pocket-stock", Shape: stock.ShapeBox, Box: &stock.Box{Min: mn, Max: mx}}
+}
+
+func TestPlanTestmeshPocket(t *testing.T) {
+	m := testmesh(t)
+	pr := part.Part{ID: "testmesh", Name: "cylinder on base", Mesh: "testmesh.stl"}
+	pr.Operation = part.OpPocket
+	sz, cz := -10.0, -15.0
+	pr.SliceZ = &sz
+	pr.CutZ = &cz
+	p := Params{
+		Part:    pr,
+		Mesh:    m,
+		Stock:   pocketStock(kernel.P3(-50, -50, -20), kernel.P3(50, 50, 5)),
+		Tool:    endmill10(),
+		Machine: mill(),
+		Feed:    800,
+		Spindle: 6000,
+		Coolant: moves.CoolantFlood,
+	}
+	out, err := Plan(p)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	// The Z model: slice -10 (face), cut -15, safe = stock top 5 + 5.
+	if out.SliceZ != -10 || out.CutZ != -15 || out.SafeZ != 10 {
+		t.Fatalf("Z model = slice %g / cut %g / safe %g, want -10 / -15 / 10", out.SliceZ, out.CutZ, out.SafeZ)
+	}
+	// Exactly one feature: the annulus pocket. The Boss is kept, never milled.
+	if len(out.Features) != 1 {
+		t.Fatalf("features = %d, want exactly 1 (the annulus pocket; the boss is kept)", len(out.Features))
+	}
+	fp := out.Features[0]
+	if fp.Path.ID != "pocket-0" {
+		t.Fatalf("path ID = %q, want pocket-0", fp.Path.ID)
+	}
+	first := fp.Path.Moves[0]
+	if first.Kind != moves.KindRapid || first.From.Z != out.SafeZ || first.To.Z != out.CutZ {
+		t.Fatalf("first move = %+v, want a plunge from safe %g to cut %g (ADR-020)", first, out.SafeZ, out.CutZ)
+	}
+	if !fp.Entry.Eq(P(first.From.X, first.From.Y), 1e-9) {
+		t.Fatalf("entry %v does not match the plunge column %v", fp.Entry, P(first.From.X, first.From.Y))
+	}
+
+	// Constant chip-load feed on every cutting move (ADR-022): the default
+	// stepover is the tool radius (5 mm).
+	aE, err := toolpath.Engagement(5, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFeed, err := toolpath.ChipLoadFeed(800, aE, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, mv := range fp.Path.Moves {
+		if mv.Kind == moves.KindRapid {
+			continue
+		}
+		if math.Abs(mv.Feed-wantFeed) > 1e-9 {
+			t.Fatalf("cutting move %d feed = %g, want %g (F_full*sqrt(a_e/D))", i, mv.Feed, wantFeed)
+		}
+	}
+
+	// The boss is cleared around, never cut (Law 7): the tool centre must
+	// stay outside the boss keep-out on every cutting move and at every
+	// plunge column. The model is the tessellated boss (the STL section —
+	// a ~289-gon, not the ideal circle), and the planner's keep-out is its
+	// mitred offset, whose boundary lies within the corner sagitta
+	// 5·(1−cos(π/289)) ≈ 0.3 µm of the true Minkowski sum. We therefore
+	// check the distance to the boss contour against the tool radius with
+	// a 5 µm representation allowance (CNC tolerances are orders of
+	// magnitude larger; an ideal-circle check at 1e-9 would reject a path
+	// that is exactly safe for the model).
+	feats, err := part.Detect(m, -10)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	var bossContour kernel.Chain2
+	foundBoss := false
+	for _, f := range feats {
+		if f.Kind == planning.Boss {
+			bossContour = f.Contour
+			foundBoss = true
+		}
+	}
+	if !foundBoss {
+		t.Fatalf("no Boss feature in the testmesh section — the fixture changed?")
+	}
+	const toolR, bossTol = 5.0, 0.005
+	clear := func(what string, q kernel.Point2) {
+		if d := kernel.PointToChainDist(q, bossContour); d < toolR-bossTol {
+			t.Fatalf("%s at %v is inside the boss keep-out (dist %g < %g)", what, q, d, toolR)
+		}
+	}
+	for i, mv := range fp.Path.Moves {
+		switch mv.Kind {
+		case moves.KindLinear:
+			clear(fmt.Sprintf("linear move %d", i), P(mv.From.X, mv.From.Y))
+			clear(fmt.Sprintf("linear move %d", i), P(mv.To.X, mv.To.Y))
+		case moves.KindArcCCW, moves.KindArcCW:
+			for _, tt := range []float64{0.25, 0.5, 0.75} {
+				clear(fmt.Sprintf("arc move %d", i), arcPointAt(mv, tt))
+			}
+		case moves.KindRapid:
+			if mv.From.Z != mv.To.Z {
+				clear(fmt.Sprintf("plunge %d", i), P(mv.From.X, mv.From.Y))
+			}
+		}
+	}
+
+	// Coverage (ADR-027): the two rows tangent to the boss keep-out
+	// (y = ±17.5) are cut across the full width — the annulus is cleared
+	// end to end. Each such row may be split by the boss contact into two
+	// intervals (a lift between); their combined length still spans the
+	// full 40 mm.
+	span := map[float64]float64{}
+	for _, mv := range fp.Path.Moves {
+		if mv.Kind == moves.KindLinear && math.Abs(mv.From.Y) > 17 {
+			span[mv.From.Y] += math.Abs(mv.From.X - mv.To.X)
+		}
+	}
+	if len(span) != 2 {
+		t.Fatalf("want the two tangent rows (y=±17.5), got %v", span)
+	}
+	for y, w := range span {
+		if w < 39.8 {
+			t.Fatalf("row y=%g spans %g mm, want the full 40 mm width", y, w)
+		}
+	}
+	if err := out.Validate(); err != nil {
+		t.Fatalf("result is invalid: %v", err)
+	}
+}
+
+// arcPointAt evaluates an arc move at fraction t of its sweep.
+func arcPointAt(mv moves.Move, t float64) kernel.Point2 {
+	c := P(mv.Center.X, mv.Center.Y)
+	r := c.Dist(P(mv.From.X, mv.From.Y))
+	a0 := math.Atan2(mv.From.Y-mv.Center.Y, mv.From.X-mv.Center.X)
+	a1 := math.Atan2(mv.To.Y-mv.Center.Y, mv.To.X-mv.Center.X)
+	var sweep float64
+	if mv.CW {
+		sweep = -kernel.NormalizeAngle(a0 - a1)
+	} else {
+		sweep = kernel.NormalizeAngle(a1 - a0)
+	}
+	theta := a0 + t*sweep
+	return P(c.X+math.Cos(theta)*r, c.Y+math.Sin(theta)*r)
+}
+
+func TestPlanPocketBlindFloorKept(t *testing.T) {
+	m := recessPlate()
+	if err := m.Validate(); err != nil {
+		t.Fatalf("validate recess plate: %v", err)
+	}
+	pr := part.Part{ID: "recess", Name: "plate with a blind recess", Mesh: "recess.stl"}
+	pr.Operation = part.OpPocket
+	sz, cz := 1.0, 0.25
+	pr.SliceZ = &sz
+	pr.CutZ = &cz
+	p := Params{
+		Part:    pr,
+		Mesh:    m,
+		Stock:   pocketStock(kernel.P3(-1, -1, 0), kernel.P3(5, 5, 1.5)),
+		Tool:    smallEndmill(),
+		Machine: mill(),
+		Feed:    800,
+		Spindle: 8000,
+	}
+	out, err := Plan(p)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(out.Features) != 1 {
+		t.Fatalf("features = %d, want 1 (the face pocket)", len(out.Features))
+	}
+	fp := out.Features[0]
+
+	// The blind floor [1.5,2.5]², offset outside by R=0.25, is a keep-out
+	// [1.25,2.75]² (ADR-028): no cutting move may cross its interior on a
+	// row that overlaps it, and no plunge may land inside it.
+	lo, hi := 1.25, 2.75
+	for i, mv := range fp.Path.Moves {
+		switch mv.Kind {
+		case moves.KindLinear, moves.KindArcCCW, moves.KindArcCW:
+			y := mv.From.Y
+			if y > lo && y < hi {
+				xlo, xhi := math.Min(mv.From.X, mv.To.X), math.Max(mv.From.X, mv.To.X)
+				if xhi > lo+1e-9 && xlo < hi-1e-9 {
+					t.Fatalf("cutting move %d at y=%g crosses the blind floor keep-out [%g, %g]", i, y, lo, hi)
+				}
+			}
+		case moves.KindRapid:
+			if mv.From.Z != mv.To.Z {
+				if mv.From.X > lo+1e-9 && mv.From.X < hi-1e-9 && mv.From.Y > lo+1e-9 && mv.From.Y < hi-1e-9 {
+					t.Fatalf("plunge %d at (%g, %g) is inside the blind floor keep-out", i, mv.From.X, mv.From.Y)
+				}
+			}
+		}
+	}
+	// The face around the floor is still cleared: full-width rows exist
+	// above and below the keep-out.
+	full := 0
+	for _, mv := range fp.Path.Moves {
+		if mv.Kind == moves.KindLinear && math.Abs(mv.From.X-mv.To.X) > 3.49 {
+			full++
+		}
+	}
+	if full < 4 {
+		t.Fatalf("want at least 4 full-width rows (around the keep-out), got %d", full)
+	}
+	if err := out.Validate(); err != nil {
+		t.Fatalf("result is invalid: %v", err)
+	}
+}
+
+func TestPlanPocketThroughHoleIsAir(t *testing.T) {
+	m := tube2()
+	if err := m.Validate(); err != nil {
+		t.Fatalf("validate tube: %v", err)
+	}
+	pr := part.Part{ID: "tube", Name: "plate with a through-hole", Mesh: "tube.stl"}
+	pr.Operation = part.OpPocket
+	sz, cz := 1.0, 0.25
+	pr.SliceZ = &sz
+	pr.CutZ = &cz
+	p := Params{
+		Part:    pr,
+		Mesh:    m,
+		Stock:   pocketStock(kernel.P3(-1, -1, 0), kernel.P3(3, 3, 1.5)),
+		Tool:    smallEndmill(),
+		Machine: mill(),
+		Feed:    800,
+		Spindle: 8000,
+	}
+	out, err := Plan(p)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(out.Features) != 1 {
+		t.Fatalf("features = %d, want 1 (the face pocket)", len(out.Features))
+	}
+	fp := out.Features[0]
+	// The through-hole [0.5,1.5]² is air (an empty column, ADR-028): the
+	// raster cuts across it — rows overlap the hole's x-span and are NOT
+	// split by it (no lifts, no keep-out).
+	across := 0
+	for _, mv := range fp.Path.Moves {
+		if mv.Kind == moves.KindLinear &&
+			mv.From.Y > 0.5 && mv.From.Y < 1.5 &&
+			math.Min(mv.From.X, mv.To.X) < 0.5 && math.Max(mv.From.X, mv.To.X) > 1.5 {
+			across++
+		}
+	}
+	if across < 3 {
+		t.Fatalf("want at least 3 rows cut across the through-hole (it is air), got %d", across)
+	}
+	for _, d := range out.Diagnostics {
+		if strings.Contains(d.Message, "lifted between intervals") {
+			t.Fatalf("unexpected interval split on the through-hole: %v", d)
+		}
+	}
+	if err := out.Validate(); err != nil {
+		t.Fatalf("result is invalid: %v", err)
+	}
+}
+
+func TestPlanPocketRefusals(t *testing.T) {
+	t.Run("band section refused", func(t *testing.T) {
+		pr := part.Part{ID: "plate", Mesh: "plate.stl"}
+		pr.Operation = part.OpPocket
+		sz := 5.0 // strictly between the plate's vertex heights 0 and 10
+		pr.SliceZ = &sz
+		p := baseParams(t)
+		p.Part = pr
+		_, err := Plan(p)
+		if err == nil || !strings.Contains(err.Error(), "face section") {
+			t.Fatalf("want a refusal naming the face-section requirement, got %v", err)
+		}
+	})
+	t.Run("chip-load feed below machine minimum refused", func(t *testing.T) {
+		m := testmesh(t)
+		pr := part.Part{ID: "testmesh", Mesh: "testmesh.stl"}
+		pr.Operation = part.OpPocket
+		sz, cz := -10.0, -15.0
+		pr.SliceZ = &sz
+		pr.CutZ = &cz
+		p := Params{
+			Part: pr, Mesh: m,
+			Stock:   pocketStock(kernel.P3(-50, -50, -20), kernel.P3(50, 50, 5)),
+			Tool:    endmill10(),
+			Machine: mill(), // MinFeed 50
+			Feed:    100,    // → chip feed ≈ 25.9 < 50
+			Spindle: 6000,
+		}
+		_, err := Plan(p)
+		if err == nil || !strings.Contains(err.Error(), "chip-load feed") {
+			t.Fatalf("want a refusal naming the chip-load feed minimum, got %v", err)
+		}
+	})
+	t.Run("stepover above 2R refused", func(t *testing.T) {
+		m := testmesh(t)
+		pr := part.Part{ID: "testmesh", Mesh: "testmesh.stl"}
+		pr.Operation = part.OpPocket
+		sz, cz := -10.0, -15.0
+		pr.SliceZ = &sz
+		pr.CutZ = &cz
+		pr.Stepover = ptrF(11) // > 2 × R = 10
+		p := Params{
+			Part: pr, Mesh: m,
+			Stock:   pocketStock(kernel.P3(-50, -50, -20), kernel.P3(50, 50, 5)),
+			Tool:    endmill10(),
+			Machine: mill(),
+			Feed:    800,
+			Spindle: 6000,
+		}
+		_, err := Plan(p)
+		if err == nil || !strings.Contains(err.Error(), "stepover") {
+			t.Fatalf("want a refusal naming the stepover, got %v", err)
+		}
+	})
 }

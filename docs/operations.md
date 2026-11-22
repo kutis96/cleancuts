@@ -24,15 +24,18 @@ plunge, cutting loop, retract. See `internal/toolpath/profile.go`.
   it in front of `Loop` is the next step.
 - **Climb vs. conventional** per contour (see below).
 
-### Pocket (2D) — *phase 3* (ADR-021, ADR-022, ADR-026)
+### Pocket (2D) — *phase 3* (ADR-021, ADR-022, ADR-026, ADR-027, ADR-028)
 
 Removes the material in a **region** down to `cut_z`.
 
-- **The region** (ADR-021): `outer` (the depth-0 boundary) minus the
-  **bosses** — nested loops whose material rises *above* the slice plane
-  (kept, e.g. a cylinder standing on a base). Void loops are air (part of
-  the cleared region). The tool centre stays inside `outer`, outside every
-  boss.
+- **The region** (ADR-021, refined by ADR-028): `outer` (the depth-0
+  boundary) minus the **keep-outs** — nested loops that are kept material:
+  a **Boss** (material rising *above* the slice plane, e.g. a cylinder
+  standing on a base) or a **blind void** (a hole with a floor *below* the
+  slice — `mesh.RegionBottomZ` finds it; a blind floor is kept material and
+  is never cut through). A **through-void** (an empty column) is air — part
+  of the cleared region. The tool centre stays inside `outer`, outside
+  every keep-out.
 
 **The path model** (ADR-026 — the full, testable spec; `toolpath.Pocket`):
 
@@ -41,9 +44,13 @@ Removes the material in a **region** down to `cut_z`.
    `boss2 = Offset(boss, outside, R)`. Every tool-centre position must be
    inside `outer2` and outside every `boss2` — the primary clearance
    (Law 7), by construction.
-2. **Rows:** horizontal lines `y = yMin + s/2 + i·s` across `outer2`'s
-   bounding box, where `s` is the stepover (default `R`; must satisfy
-   `0 < s ≤ 2R` — coverage — else a precise refusal).
+2. **Rows** (ADR-027): horizontal lines across `outer2`'s bounding box at
+   `y = yMin + s/2 + i·s` while `y ≤ yMax − s/2`, where `s` is the stepover
+   (default `R`; must satisfy `0 < s ≤ 2R` — else a precise refusal). Two
+   coverage fixes: a region at most one stepover tall gets a single middle
+   row (`yMin + h/2`), and if the progression would leave the top `> R`
+   uncovered (the `R < s ≤ 2R` case), a final row at `yMax − s/2` is
+   appended. Every point of the region is then within `s/2 ≤ R` of a row.
 3. **Clearable intervals:** row ∩ `outer2`, minus the row ∩ each `boss2` —
    analytic line/edge intersection (kernel) + interval subtraction; the
    result is a sorted list of disjoint intervals. Intervals shorter than
@@ -76,8 +83,10 @@ Removes the material in a **region** down to `cut_z`.
 - **Entry:** the lead-in (ADR-023) precedes the first interval's start — the
   cutter starts outside the cut area, plunges there, and cuts into the
   region. See part.md for the geometry.
-- **Coverage:** rows spaced `s ≤ 2R` sweep strips of width `2R` that overlap
-  — the region is fully covered by the tool disc.
+- **Coverage** (ADR-027): each row's tool disc sweeps a strip of width `2R`
+  centred on the row, and the row placement (step 2) guarantees every point
+  of the region lies within `s/2 ≤ R` of some row — full coverage by
+  construction, including the single-row and top-strip edge cases.
 - **Tessellation bound:** a boss from a tessellated mesh (the Testmesh
   cylinder is a 289-gon) is cleared to its *polygon*; the sagitta bound is
   ≤ r·(1 − cos(π/n)) — for the Testmesh < 1 µm (documented, negligible).

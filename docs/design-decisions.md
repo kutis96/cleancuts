@@ -1218,3 +1218,94 @@ bosses) is built as:
 **Related.** ADR-022 (refined), ADR-021 (the boss keep-out), ADR-020 (the
 plunge contract), ADR-013 (safe degradation), ADR-012 (the fixture gate),
 operations.md (the full model), toolpath (the implementation).
+
+---
+
+## ADR-027 — Pocket rows are placed so both ends of the region are covered (Refines ADR-026 §1)
+
+**Context.** ADR-026 places rows at `y = yMin + s/2 + i·s` while the row lies
+within the region's bounding box, and operations.md claims "rows spaced
+`s ≤ 2R` sweep strips of width `2R` that overlap — the region is fully
+covered by the tool disc." The claim holds at the bottom (first row at
+`s/2 ≤ R`) but not at the top: the last row is the largest of the
+progression at or below `yMax`, so it can sit up to `s` below the top edge.
+When `R < s ≤ 2R` that leaves an uncovered strip of up to `s − R` at the top
+(e.g. a 12 mm-tall region, `R = 5`, `s = 10`: the only row is at 5 mm, and
+the top 2 mm is never within a tool radius). Leaving material is the safe
+side, but it contradicts the documented coverage guarantee and the
+"constant engagement" intent (the missed strip is a residual, not a
+strategy).
+
+**Decision.** The row set is the ADR-026 progression
+`y = yMin + s/2 + i·s`, with two coverage guarantees added:
+
+- If the region height `H = yMax − yMin` is at most `s`, there is a single
+  row at the middle, `yMin + H/2` (it covers `[yMin, yMax]` because
+  `H/2 ≤ s/2 ≤ R`).
+- Otherwise, after the progression, if the last row leaves a gap
+  `yMax − yLast > R`, a **final row is added at `yMax − s/2`** (which is
+  within `s/2 ≤ R` of the top edge). The final gap is then `≤ s/2`, and the
+  interior spacing is `s` (the final row may be closer than `s` to the
+  previous one — a tighter spacing only lowers the real engagement, and the
+  feed is computed from the nominal `a_e`, so the chip load stays at or
+  below the constant target — the safe side).
+
+Every point of the region is then within `s/2 ≤ R` of a row: full coverage
+at both ends and between rows, by construction.
+
+**Consequences.**
+
+- The coverage guarantee in operations.md is now true for all
+  `0 < s ≤ 2R`, not just `s ≤ R`.
+- The serpentine parity (row index, bottom to top) and the engagement/feed
+  model (nominal `a_e` from the stepover `s`) are unchanged; the refinement
+  only adds or moves the last row.
+- A region shorter than one stepover still gets one central row — a small
+  face (a narrow annulus sliver) is cleared, not skipped.
+
+**Related.** ADR-026 §1 (refined), ADR-022 (coverage and engagement),
+operations.md (the coverage note).
+
+---
+
+## ADR-028 — In pocket mode, a void with material below the section is a keep-out, not air (Refines ADR-026)
+
+**Context.** ADR-026 says "void loops are air (part of the cleared
+region)". That is true for a *through*-void: its column is empty, so the
+raster simply cuts air there. It is false for a *blind* void — a hole with
+a floor below the section plane: its column contains kept material (the
+floor). ADR-021 classifies loops by material *above* the section (a Boss);
+a blind void has no material above, so it classifies as a Pocket (void) and
+ADR-026's rule would clear the raster straight through its floor down to
+`cut_z` — destroying kept material (Law 7). A face with a raised boss *and*
+a blind hole is a perfectly common 2.5D part, so the model must cover it.
+
+**Decision.** In pocket mode, the planner looks at the **whole column** of
+each depth-1 nested loop, not just the material above the section:
+
+- material **above** the section (a Boss, ADR-021) → keep-out (offset
+  outside by R, cleared around);
+- material **below** the section in the loop's column (a blind floor) →
+  keep-out as well (offset outside by R, cleared around) — the floor is
+  kept material, and the raster must not punch through it;
+- **no material in the column** (a through-void) → air: part of the cleared
+  region, exactly as ADR-026 says.
+
+The new pure primitive `mesh.RegionBottomZ(outer, inners)` (sibling of
+`mesh.RegionTopZ`, ADR-021) returns the lowest material Z in the region's
+column; a loop is a blind floor iff it has material below and
+`bottomZ < sliceZ − tol`. Deeper nesting is unchanged: a loop nested inside
+a keep-out is kept material's interior and is skipped (Law 7).
+
+**Consequences.**
+
+- A face with a boss and a blind hole clears correctly: boss and floor are
+  both kept, the rest of the face is cleared to `cut_z`.
+- Through-holes keep the ADR-026 behaviour (cut air), so the plate example
+  is unaffected.
+- The rule is a safe-side refinement: it can only *remove* area from the
+  cleared region, never add — the failure mode is a kept floor, which is
+  the design, not an over-cut.
+
+**Related.** ADR-026 (refined), ADR-021 (the Boss rule it generalises),
+`mesh.RegionBottomZ`, Law 7 (never over-cut).

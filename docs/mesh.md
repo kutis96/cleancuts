@@ -108,6 +108,25 @@ This is the signal `part.Detect` uses to split a nested loop into a **Boss**
 (`has && topZ > sliceZ`, material rises above the section — kept) and a
 **Pocket** (no material above — a void). See ADR-021.
 
+## RegionBottomZ — the material-below test (ADR-028)
+
+`RegionBottomZ(outer, inners) (bottomZ, has, err)` is the sibling of
+`RegionTopZ`: it returns the **lowest material Z within the region** bounded
+by `outer`, excluding the interiors of `inners`, computed over the same
+triangle set (centroid inside `outer`, outside every `inner`).
+
+- `has` is `true` when the region contains material, `false` when the column
+  is empty.
+- `bottomZ` is the min vertex Z over those triangles (meaningful only when
+  `has`).
+- It is a **pure, testable** primitive (Law 5): no I/O, no global state.
+
+This is the signal that turns a **blind void** into a **keep-out** (ADR-028):
+a nested loop is a kept floor when `has && bottomZ < sliceZ` — there is
+material *below* the section in its column, so a pocket raster must not punch
+through it (Law 7). An **empty column** (`has == false`, a through-hole) is
+air and is part of the cleared region. See ADR-028.
+
 ## Formats
 
 ### STL
@@ -137,5 +156,7 @@ This is the signal `part.Detect` uses to split a nested loop into a **Boss**
 exact sections (cube, tetrahedron, tube-with-hole) and every error case above.
 **v0.2:** `RegionTopZ` — the material-above test for boss/pocket
 classification (ADR-021).
+**Phase 3:** `RegionBottomZ` — the material-below test for blind-void
+keep-outs (ADR-028).
 **Later:** coplanar sectioning (polygon union) or B-rep import; multi-object
 3MF selection; mesh stock behind the `stock` surface (ADR-015).

@@ -547,6 +547,48 @@ func (m Mesh) RegionTopZ(outer kernel.Chain2, inners []kernel.Chain2) (topZ floa
 	return topZ, true, nil
 }
 
+// RegionBottomZ returns the lowest material Z in the region's column
+// (outer minus the inners), over the mesh triangles whose centroid lies in
+// the region (the sibling of RegionTopZ, ADR-028): it answers "is there
+// material anywhere below in this column" — the blind-floor test the
+// pocket planner needs (a void whose column is empty is air; one with
+// material below is a kept floor the raster must not punch through).
+// has=false means the column has no material at all (a through-void).
+func (m Mesh) RegionBottomZ(outer kernel.Chain2, inners []kernel.Chain2) (bottomZ float64, has bool, err error) {
+	if err := m.Validate(); err != nil {
+		return 0, false, err
+	}
+	if err := outer.Validate(); err != nil {
+		return 0, false, fmt.Errorf("mesh: RegionBottomZ outer boundary: %w", err)
+	}
+	bottomZ = math.Inf(1)
+	for _, t := range m.Triangles {
+		a, b, c := m.Vertices[t.A], m.Vertices[t.B], m.Vertices[t.C]
+		cen := kernel.P2((a.X+b.X+c.X)/3.0, (a.Y+b.Y+c.Y)/3.0)
+		if !kernel.PointInContour(cen, outer) {
+			continue
+		}
+		inInner := false
+		for _, in := range inners {
+			if kernel.PointInContour(cen, in) || kernel.PointToChainDist(cen, in) < kernel.AbsTol {
+				inInner = true
+				break
+			}
+		}
+		if inInner {
+			continue
+		}
+		if z := math.Min(a.Z, math.Min(b.Z, c.Z)); z < bottomZ {
+			bottomZ = z
+		}
+		has = true
+	}
+	if !has {
+		return 0, false, nil
+	}
+	return bottomZ, true, nil
+}
+
 // planeThroughVertexError builds the precise, actionable refusal for a
 // plane that hits a vertex (the coplanar case, ADR-017): it names the
 // vertex and the triangle, and — when the levels allow — suggests the

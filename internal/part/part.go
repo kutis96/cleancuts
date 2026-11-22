@@ -21,6 +21,35 @@ import (
 	"github.com/kutis96/cleancuts/internal/planning"
 )
 
+// Operation names what the part recipe asks for at the section.
+type Operation string
+
+const (
+	// OpProfile (default): mill each cuttable contour — profiles with the
+	// tool outside, voids with the tool inside. Bosses are never milled
+	// (ADR-021).
+	OpProfile Operation = "profile"
+	// OpPocket (ADR-022/026): clear the region outer-minus-bosses down to
+	// cut_z with the trochoidal raster. Valid on a face section only — on a
+	// band section the region is solid material and clearing it would cut
+	// through the part (the planner refuses, naming the section).
+	OpPocket Operation = "pocket"
+)
+
+// LeadIn is the user-definable entry lead-in (ADR-023): it lets the cutter
+// start at a specified point outside the actual area to be cut. Both fields
+// are optional; the planner fills the defaults (tangent, min(tool radius,
+// 3 mm)) and applies the safe fallback chain (tangent → straight → none).
+type LeadIn struct {
+	// Kind is "straight" (extend the entry edge's line backward) or
+	// "tangent" (a quarter arc tangent to the entry edge, bulging onto the
+	// material-removal side). Empty defaults to tangent.
+	Kind string `json:"kind,omitempty"`
+	// Length is the lead-in length in mm. Nil defaults to min(tool radius,
+	// 3 mm).
+	Length *float64 `json:"length,omitempty"`
+}
+
 // Part is the portable part recipe (ADR-018 §1, Law 6). Mesh names the
 // geometry file (STL or 3MF, canonical WCS); the CLI resolves it and passes
 // the parsed mesh to the core — part itself never touches I/O.
@@ -37,6 +66,21 @@ type Part struct {
 	// CutZ is the tool-tip height of the cut. Nil selects the default:
 	// the part's minimum Z (a cut through the part).
 	CutZ *float64 `json:"cut_z,omitempty"`
+	// Operation is what to do at the section (ADR-021/022): OpProfile
+	// (default — mill each cuttable contour) or OpPocket (clear the region
+	// outer-minus-bosses down to cut_z — face sections only).
+	Operation Operation `json:"operation,omitempty"`
+	// Material is the workpiece material name, matched against the tool's
+	// feeds[].material when feed/spindle are not given explicitly
+	// (ADR-024).
+	Material string `json:"material,omitempty"`
+	// Stepover is the pocket row spacing s in mm (ADR-022/027). Nil
+	// selects the default: the tool radius. Must be > 0 and ≤ 2R
+	// (coverage) — the planner checks the tool-dependent bound.
+	Stepover *float64 `json:"stepover,omitempty"`
+	// LeadIn is the entry lead-in (ADR-023). Nil uses the safe default
+	// (tangent, min(tool radius, 3 mm)).
+	LeadIn *LeadIn `json:"lead_in,omitempty"`
 }
 
 // Validate enforces the recipe invariants (Law 5).
@@ -52,6 +96,24 @@ func (p Part) Validate() error {
 	}
 	if p.CutZ != nil && !kernel.IsFinite(*p.CutZ) {
 		return fmt.Errorf("part %q: cut_z must be finite (got %g)", p.ID, *p.CutZ)
+	}
+	switch p.Operation {
+	case "", OpProfile, OpPocket:
+	default:
+		return fmt.Errorf("part %q: operation %q is unknown (want \"profile\" or \"pocket\")", p.ID, p.Operation)
+	}
+	if p.Stepover != nil && (!kernel.IsFinite(*p.Stepover) || *p.Stepover <= 0) {
+		return fmt.Errorf("part %q: stepover must be > 0 (got %g)", p.ID, *p.Stepover)
+	}
+	if li := p.LeadIn; li != nil {
+		switch li.Kind {
+		case "", "straight", "tangent":
+		default:
+			return fmt.Errorf("part %q: lead_in.kind %q is unknown (want \"straight\" or \"tangent\")", p.ID, li.Kind)
+		}
+		if li.Length != nil && (!kernel.IsFinite(*li.Length) || *li.Length <= 0) {
+			return fmt.Errorf("part %q: lead_in.length must be > 0 (got %g)", p.ID, *li.Length)
+		}
 	}
 	return nil
 }
