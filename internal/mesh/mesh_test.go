@@ -314,3 +314,176 @@ func TestSliceNonManifoldRefused(t *testing.T) {
 		t.Errorf("error should name the dangling point and count: %v", err)
 	}
 }
+
+// --- FaceLoops (the face section, ADR-025) ------------------------------
+
+func TestFaceLoopsCubeTop(t *testing.T) {
+	loops, err := cube().FaceLoops(1)
+	if err != nil {
+		t.Fatalf("FaceLoops(1): %v", err)
+	}
+	if len(loops) != 1 {
+		t.Fatalf("got %d loops, want 1 (the top face)", len(loops))
+	}
+	if !loops[0].IsClosed() {
+		t.Fatalf("loop is not closed")
+	}
+	// |area| = 1 (1×1 face). Orientation is deterministic (the total-order
+	// walk) but a consumer detail: pin the magnitude, read the sign via
+	// SignedArea like everything else downstream does.
+	if got := math.Abs(loops[0].SignedArea()); math.Abs(got-1.0) > 1e-12 {
+		t.Errorf("top face |area| = %g, want 1", got)
+	}
+}
+
+func TestFaceLoopsCubeBottomRefused(t *testing.T) {
+	_, err := cube().FaceLoops(0)
+	if err == nil {
+		t.Fatalf("a downward-only face must be refused")
+	}
+	if !strings.Contains(err.Error(), "no upward-facing face") {
+		t.Errorf("error should name the missing upward face: %v", err)
+	}
+}
+
+func TestFaceLoopsTubeTopTwoLoops(t *testing.T) {
+	// The tube's top face is an annulus: the outer boundary (2×2 = 4) and
+	// the hole boundary (1×1 = 1), as two separate loops (ADR-025).
+	loops, err := tube().FaceLoops(1)
+	if err != nil {
+		t.Fatalf("FaceLoops(1): %v", err)
+	}
+	if len(loops) != 2 {
+		t.Fatalf("got %d loops, want 2 (outer + hole)", len(loops))
+	}
+	mags := []float64{math.Abs(loops[0].SignedArea()), math.Abs(loops[1].SignedArea())}
+	if !(math.Abs(mags[0]-4) < 1e-12 && math.Abs(mags[1]-1) < 1e-12) &&
+		!(math.Abs(mags[0]-1) < 1e-12 && math.Abs(mags[1]-4) < 1e-12) {
+		t.Errorf("loop |areas| = %v, want 4 (2×2 outer) and 1 (1×1 hole)", mags)
+	}
+	// Deterministic orientation: run twice, the signed areas must agree
+	// (the total-order walk — no map-order leakage).
+	again, err := tube().FaceLoops(1)
+	if err != nil {
+		t.Fatalf("FaceLoops(1) again: %v", err)
+	}
+	sig := func(loops []kernel.Chain2) string {
+		s := ""
+		for _, l := range loops {
+			if l.SignedArea() > 0 {
+				s += "+"
+			} else {
+				s += "-"
+			}
+		}
+		return s
+	}
+	if sig(loops) != sig(again) {
+		t.Errorf("orientation not deterministic: %s vs %s", sig(loops), sig(again))
+	}
+}
+
+func TestFaceLoopsTestmesh(t *testing.T) {
+	data, err := os.ReadFile("../../examples/parts/testmesh_cyl_on_base.stl")
+	if err != nil {
+		t.Fatalf("reading testmesh: %v", err)
+	}
+	m, err := ParseSTL(data)
+	if err != nil {
+		t.Fatalf("ParseSTL(testmesh): %v", err)
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("testmesh fails validation: %v", err)
+	}
+
+	// Base top (z=-10): the 50×50 square + the Ø25 cylinder circle
+	// (a tessellated 289-gon), opposite orientation.
+	loops, err := m.FaceLoops(-10)
+	if err != nil {
+		t.Fatalf("FaceLoops(-10): %v", err)
+	}
+	if len(loops) != 2 {
+		t.Fatalf("got %d loops, want 2 (square + circle)", len(loops))
+	}
+	areas := []float64{math.Abs(loops[0].SignedArea()), math.Abs(loops[1].SignedArea())}
+	if !(math.Abs(areas[0]-2500) < 1e-9 && math.Abs(areas[1]-490.87) < 1.0) &&
+		!(math.Abs(areas[0]-490.87) < 1.0 && math.Abs(areas[1]-2500) < 1e-9) {
+		t.Errorf("loop areas = %v, want 2500 (50×50) and ≈ 490.87 (Ø25 circle)", areas)
+	}
+	// The circle loop is a polygon: many edges, every vertex at radius
+	// ≈ 12.5 from the origin (the cylinder is centred).
+	var circle kernel.Chain2
+	for _, l := range loops {
+		if len(l.Edges) > 50 {
+			circle = l
+		}
+	}
+	if circle.Edges == nil {
+		t.Fatalf("no circle-like loop found (edges: %d, %d)", len(loops[0].Edges), len(loops[1].Edges))
+	}
+	for _, e := range circle.Edges {
+		l, _ := e.AsLine()
+		r := math.Hypot(l.Start.X, l.Start.Y)
+		if math.Abs(r-12.5) > 0.01 {
+			t.Errorf("circle vertex (%g,%g) at radius %g, want ≈ 12.5", l.Start.X, l.Start.Y, r)
+			break
+		}
+	}
+
+	// Cylinder top (z=0): a single loop, the Ø25 circle.
+	top, err := m.FaceLoops(0)
+	if err != nil {
+		t.Fatalf("FaceLoops(0): %v", err)
+	}
+	if len(top) != 1 || math.Abs(math.Abs(top[0].SignedArea())-490.87) > 1.0 {
+		t.Fatalf("cylinder top: want one loop of area ≈ 490.87, got %d loops", len(top))
+	}
+
+	// Base bottom (z=-20): downward-only — refused.
+	if _, err := m.FaceLoops(-20); err == nil || !strings.Contains(err.Error(), "no upward-facing face") {
+		t.Errorf("base bottom must be refused with the no-upward-face error, got %v", err)
+	}
+}
+
+func TestFaceLoopsPinchPointRefused(t *testing.T) {
+	// A figure-eight face: two +Z triangles sharing only the vertex A.
+	// A joins four boundary edges — a pinch point, refused rather than
+	// guessed (a figure-eight "loop" is not a valid contour).
+	m := Mesh{
+		Vertices: []kernel.Point3{
+			kernel.P3(0, 0, 0), kernel.P3(1, 0, 0), kernel.P3(0.5, 0.8, 0),
+			kernel.P3(-1, 0, 0), kernel.P3(-0.5, 0.8, 0),
+		},
+		Triangles: []Tri{
+			{A: 0, B: 1, C: 2}, {A: 0, B: 4, C: 3},
+		},
+	}
+	_, err := m.FaceLoops(0)
+	if err == nil {
+		t.Fatalf("a non-manifold face boundary must be refused")
+	}
+	if !strings.Contains(err.Error(), "boundary edges (want 2)") {
+		t.Errorf("error should name the offending boundary vertex degree: %v", err)
+	}
+}
+
+func TestFaceLoopsEdgeOwnedByThreeRefused(t *testing.T) {
+	// Three +Z triangles sharing the edge (A,B): the edge is owned by
+	// three face triangles — non-manifold, refused.
+	m := Mesh{
+		Vertices: []kernel.Point3{
+			kernel.P3(0, 0, 0), kernel.P3(1, 0, 0), kernel.P3(0, 1, 0),
+			kernel.P3(2, 1, 0), kernel.P3(1, 2, 0),
+		},
+		Triangles: []Tri{
+			{A: 0, B: 1, C: 2}, {A: 0, B: 1, C: 3}, {A: 0, B: 1, C: 4},
+		},
+	}
+	_, err := m.FaceLoops(0)
+	if err == nil {
+		t.Fatalf("an edge owned by three face triangles must be refused")
+	}
+	if !strings.Contains(err.Error(), "belongs to 3 face triangles") {
+		t.Errorf("error should name the triple-owned edge: %v", err)
+	}
+}

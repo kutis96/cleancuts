@@ -318,12 +318,195 @@ func (m Mesh) Slice(z float64) ([]kernel.Chain2, error) {
 	return loops, nil
 }
 
+// FaceLoops returns the boundary loops of the union of the solid's
+// upward-facing horizontal faces at height h (ADR-025 — the face section):
+// a triangle qualifies as a face triangle when all three of its vertices
+// lie at z=h (within AbsTol) and its normal points +Z (a horizontal
+// triangle's normal is exactly ±Z, so the test is exact; a downward face
+// is not a top face and is excluded). The boundary is extracted by edge
+// pairing: an edge owned by exactly one face triangle is a boundary edge;
+// each boundary vertex then joins exactly two boundary edges and the edges
+// stitch into closed loops (the same 2-regular walk as Slice). The loops
+// are returned in deterministic order and orientation: the walk always
+// starts at a face edge's lexicographically smaller endpoint and follows
+// the cycle (a +Z face walks its outer boundary clockwise and its holes
+// counter-clockwise — consumers still measure SignedArea, never assume).
+//
+// This is the section a pocket on a face needs (the Testmesh base top at
+// z=-10: square + cylinder circle). Non-manifold face complexes — a
+// boundary vertex joining != 2 edges (a T-junction), an edge owned by
+// >= 3 face triangles, or no face at the height at all — are precise
+// refusals (Law 7 in import form: never extract a wrong boundary).
+func (m Mesh) FaceLoops(h float64) ([]kernel.Chain2, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	if !kernel.IsFinite(h) {
+		return nil, fmt.Errorf("mesh: FaceLoops height h=%g is not finite", h)
+	}
+
+	type pkey struct{ x, y float64 }
+	key := func(p kernel.Point3) pkey { return pkey{p.X, p.Y} }
+	edgeKey := func(a, b pkey) [4]float64 {
+		if a.x < b.x || (a.x == b.x && a.y <= b.y) {
+			return [4]float64{a.x, a.y, b.x, b.y}
+		}
+		return [4]float64{b.x, b.y, a.x, a.y}
+	}
+
+	// Count face-triangle ownership of every edge.
+	count := map[[4]float64]int{}
+	for _, t := range m.Triangles {
+		a, b, c := m.Vertices[t.A], m.Vertices[t.B], m.Vertices[t.C]
+		if math.Abs(a.Z-h) > kernel.AbsTol ||
+			math.Abs(b.Z-h) > kernel.AbsTol ||
+			math.Abs(c.Z-h) > kernel.AbsTol {
+			continue
+		}
+		// +Z normal? The z-component of (b-a) x (c-a); for a horizontal
+		// triangle this is exactly the 2D cross product, non-zero
+		// (Validate rejects degenerate triangles).
+		nz := (b.X-a.X)*(c.Y-a.Y) - (b.Y-a.Y)*(c.X-a.X)
+		if nz <= 0 {
+			continue // downward face: not a top face at this height
+		}
+		for _, e := range [][2]pkey{{key(a), key(b)}, {key(b), key(c)}, {key(c), key(a)}} {
+			count[edgeKey(e[0], e[1])]++
+		}
+	}
+	if len(count) == 0 {
+		return nil, fmt.Errorf("mesh: no upward-facing face at z=%g (vertex z levels: %v) — the face there is downward-facing or absent; nothing to section",
+			h, m.VertexZs())
+	}
+
+	// Boundary edges: owned by exactly one face triangle.
+	type bseg struct{ a, b pkey }
+	segs := make([]bseg, 0, len(count))
+	for ek, n := range count {
+		switch n {
+		case 1:
+			segs = append(segs, bseg{pkey{ek[0], ek[1]}, pkey{ek[2], ek[3]}})
+		case 2:
+			// interior edge of the face — paired with its neighbour
+		default:
+			return nil, fmt.Errorf("mesh: face at z=%g: edge (%g,%g)-(%g,%g) belongs to %d face triangles — the face is not a clean 2-manifold; refuse rather than extract a wrong boundary",
+				h, ek[0], ek[1], ek[2], ek[3], n)
+		}
+	}
+	if len(segs) == 0 {
+		return nil, fmt.Errorf("mesh: face at z=%g has no boundary — it is not on the solid's surface (vertex z levels: %v)",
+			h, m.VertexZs())
+	}
+
+	// Deterministic order first (the adjacency below indexes into this
+	// final order): a total order over both endpoints, so the walk — and
+	// with it the loops' orientation — is deterministic. The walk starts
+	// at the first boundary edge, traversed from its smaller endpoint, and
+	// is then forced (each boundary vertex has exactly one continuation).
+	sort.Slice(segs, func(i, j int) bool {
+		si, sj := segs[i], segs[j]
+		if si.a.x != sj.a.x {
+			return si.a.x < sj.a.x
+		}
+		if si.a.y != sj.a.y {
+			return si.a.y < sj.a.y
+		}
+		if si.b.x != sj.b.x {
+			return si.b.x < sj.b.x
+		}
+		return si.b.y < sj.b.y
+	})
+
+	// Stitch: every boundary vertex joins exactly two boundary edges.
+	adj := map[pkey][]int{}
+	for i, s := range segs {
+		adj[s.a] = append(adj[s.a], i)
+		adj[s.b] = append(adj[s.b], i)
+	}
+	for p, idxs := range adj {
+		if len(idxs) != 2 {
+			return nil, fmt.Errorf("mesh: face at z=%g: boundary vertex (%g, %g) joins %d boundary edges (want 2) — a T-junction or non-manifold face; refuse rather than extract a wrong boundary",
+				h, p.x, p.y, len(idxs))
+		}
+	}
+
+	used := make([]bool, len(segs))
+	loops := []kernel.Chain2{}
+	for i := range segs {
+		if used[i] {
+			continue
+		}
+		start := segs[i].a
+		pts := []kernel.Point2{{X: segs[i].a.x, Y: segs[i].a.y}}
+		cur := i
+		dirFromA := true // traverse cur from a to b (a is the smaller key)
+		steps := 0
+		for {
+			steps++
+			if steps > len(segs)+1 {
+				return nil, fmt.Errorf("mesh: face at z=%g: loop did not close after %d boundary edges (inconsistent boundary graph)",
+					h, steps)
+			}
+			s := segs[cur]
+			exit := s.b
+			if !dirFromA {
+				exit = s.a
+			}
+			pts = append(pts, kernel.P2(exit.x, exit.y))
+			used[cur] = true
+			if exit == start {
+				break
+			}
+			var next int
+			found := false
+			for _, j := range adj[exit] {
+				if j == cur {
+					continue
+				}
+				next = j
+				found = true
+				break
+			}
+			if !found {
+				return nil, fmt.Errorf("mesh: face at z=%g: no continuation at (%g, %g) — the face boundary is not a clean 2-manifold",
+					h, exit.x, exit.y)
+			}
+			dirFromA = segs[next].a == exit
+			cur = next
+		}
+		if len(pts) < 3 {
+			return nil, fmt.Errorf("mesh: face at z=%g: degenerate %d-point loop (want ≥ 3)", h, len(pts))
+		}
+		edges := make([]kernel.Edge2, len(pts)-1)
+		for j := range edges {
+			e, err := kernel.NewLineEdge(pts[j], pts[j+1])
+			if err != nil {
+				return nil, fmt.Errorf("mesh: face at z=%g: %v", h, err)
+			}
+			edges[j] = e
+		}
+		chain, err := kernel.NewChain2(edges)
+		if err != nil {
+			return nil, fmt.Errorf("mesh: face at z=%g: %v", h, err)
+		}
+		if !chain.IsClosed() {
+			return nil, fmt.Errorf("mesh: face at z=%g: loop did not close (start %v, end %v)",
+				h, chain.Start(), chain.End())
+		}
+		loops = append(loops, chain)
+	}
+	return loops, nil
+}
+
 // RegionTopZ returns the highest material Z within the region bounded by
 // outer, excluding the interiors of inners (ADR-021). has is true when the
 // region contains material (at least one qualifying triangle), false when it
-// is a void. It is computed over the mesh triangles whose centroid lies inside
-// outer and outside every inner (kernel.PointInContour; a boundary centroid
-// counts as outside — the safe side).
+// is a void. It is computed over the mesh triangles whose centroid lies
+// strictly inside outer and strictly outside every inner: "strictly" means
+// not on the boundary either — a triangle whose centroid lies on an inner's
+// boundary (e.g. a child feature's wall) belongs to that child, not to the
+// region (kernel.PointInContour reports boundary as outside; we add an
+// explicit boundary exclusion via kernel.PointToChainDist).
 //
 // This is the signal part.Detect uses to split a nested loop into a Boss
 // (has && topZ above the section — kept material rising above the plane) and
@@ -345,7 +528,7 @@ func (m Mesh) RegionTopZ(outer kernel.Chain2, inners []kernel.Chain2) (topZ floa
 		}
 		inInner := false
 		for _, in := range inners {
-			if kernel.PointInContour(cen, in) {
+			if kernel.PointInContour(cen, in) || kernel.PointToChainDist(cen, in) < kernel.AbsTol {
 				inInner = true
 				break
 			}

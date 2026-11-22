@@ -74,21 +74,11 @@ func (p Part) EffectiveSliceZ(m mesh.Mesh) (float64, error) {
 		return (top + below) / 2, nil
 	}
 	z := *p.SliceZ
-	if z <= zs[0]+kernel.AbsTol || z >= zs[len(zs)-1]-kernel.AbsTol {
-		return 0, fmt.Errorf("part %q: slice_z=%g does not lie strictly inside the part (vertex heights %v)",
+	if z < zs[0]-kernel.AbsTol || z > zs[len(zs)-1]+kernel.AbsTol {
+		return 0, fmt.Errorf("part %q: slice_z=%g is outside the part (vertex heights %v)",
 			p.ID, z, zs)
 	}
-	for i, lv := range zs {
-		if math.Abs(z-lv) <= kernel.AbsTol {
-			if i > 0 && i < len(zs)-1 {
-				sug := (zs[i-1] + zs[i]) / 2
-				return 0, fmt.Errorf("part %q: slice_z=%g lies on a part face (vertex height); slice strictly between adjacent levels, e.g. z=%g (midpoint of %g and %g)",
-					p.ID, z, sug, zs[i-1], zs[i])
-			}
-			return 0, fmt.Errorf("part %q: slice_z=%g lies on a part face (vertex height); slice strictly between adjacent levels",
-				p.ID, z)
-		}
-	}
+	// A vertex height is legal now: it selects a face section (ADR-025).
 	return z, nil
 }
 
@@ -105,16 +95,21 @@ func (p Part) EffectiveCutZ(m mesh.Mesh) (float64, error) {
 	return m.Bounds().Min.Z, nil
 }
 
-// Feature is one 2.5D feature at the slice height (ADR-018 §2). Kind is the
-// shared planning vocabulary: Profile (kept material inside, tool outside)
-// or Pocket (kept material outside, tool inside).
+// Feature is one 2.5D feature at the slice height (ADR-018 §2, ADR-021).
+// Kind is the shared planning vocabulary: Profile (kept material inside,
+// tool outside), Pocket (kept material outside, tool inside), or Boss
+// (kept material rising above the section — never milled, a hard obstacle).
 type Feature struct {
 	Index   int
 	Kind    planning.FeatureKind
 	Contour kernel.Chain2
 	// Depth is the nesting depth in the section: 0 = outermost, 1 = a void
-	// inside a profile, 2 = an island inside that void, and so on.
+	// or boss inside a profile, 2 = an island inside that void, and so on.
 	Depth int
+	// Parent is the Index of the enclosing feature, or -1 for outermost.
+	// The planner uses it to keep out of kept material (a feature nested
+	// inside a Boss is kept — Law 7) and to gather a region's bosses.
+	Parent int
 	// Area is the |signed area| of the contour (mm²).
 	Area float64
 }
@@ -124,20 +119,23 @@ func (f Feature) String() string {
 	return fmt.Sprintf("feature %d (%s, %g mm², depth %d)", f.Index, f.Kind, f.Area, f.Depth)
 }
 
-// Detect slices the mesh at height z and classifies the closed loops into
-// features (ADR-018 §2):
+// Detect sections the mesh at height z and classifies the closed loops
+// into features (ADR-018 §2, ADR-021, ADR-025):
 //
+//   - the section is a band section (mesh.Slice) when z lies strictly
+//     between vertex levels, and a face section (mesh.FaceLoops) when z is
+//     on a vertex level — the boundary of the upward face(s) there;
 //   - parent(i) = the innermost (smallest-area) loop that strictly contains
 //     a vertex of loop i (kernel.PointInContour; boundary counts as outside
 //     — the safe side); outermost loops have no parent;
 //   - depth(i) = 0 for outermost, else depth(parent)+1;
-//   - kind: even depth → planning.Profile (material contour, comp.Outside),
-//     odd depth → planning.Pocket (void contour, comp.Inside).
+//   - kind: depth 0 → planning.Profile; depth > 0 → planning.Boss when the
+//     region has material above z (mesh.RegionTopZ), else planning.Pocket.
 //
 // Loops are returned ordered by depth ascending, then area descending
-// (profiles first, largest first, then the voids they enclose). Any two
-// non-nested loops whose edges intersect are refused: the kept material
-// would be ambiguous, and milling both would over-cut (Law 7).
+// (profiles first, largest first, then the voids/bosses they enclose).
+// Any two non-nested loops whose edges intersect are refused: the kept
+// material would be ambiguous, and milling both would over-cut (Law 7).
 func Detect(m mesh.Mesh, z float64) ([]Feature, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
@@ -145,7 +143,7 @@ func Detect(m mesh.Mesh, z float64) ([]Feature, error) {
 	if !kernel.IsFinite(z) {
 		return nil, fmt.Errorf("part: slice height z=%g is not finite", z)
 	}
-	loopList, err := m.Slice(z)
+	loopList, err := sectionLoops(m, z)
 	if err != nil {
 		return nil, err
 	}
@@ -219,14 +217,35 @@ func Detect(m mesh.Mesh, z float64) ([]Feature, error) {
 	for i := range loopList {
 		d := depthOf(i)
 		kind := planning.Profile
-		if d%2 == 1 {
-			kind = planning.Pocket
+		if d > 0 {
+			// ADR-021: a nested loop is a Boss when its region — the loop
+			// minus its immediate children — has material above the section
+			// plane (kept: a raised boss, or a sealed cavity — either way
+			// the tool must stay out), and a Pocket (a void) otherwise.
+			// A through-hole has no material above, so it stays a Pocket —
+			// the old parity rule is preserved as the special case.
+			var inners []kernel.Chain2
+			for j := range loopList {
+				if parent[j] == i {
+					inners = append(inners, loopList[j])
+				}
+			}
+			topZ, has, err := m.RegionTopZ(loopList[i], inners)
+			if err != nil {
+				return nil, fmt.Errorf("part: section loop %d at z=%g: %w", i, z, err)
+			}
+			if has && topZ > z+kernel.AbsTol {
+				kind = planning.Boss
+			} else {
+				kind = planning.Pocket
+			}
 		}
 		out = append(out, Feature{
 			Index:   i,
 			Kind:    kind,
 			Contour: loopList[i],
 			Depth:   d,
+			Parent:  parent[i],
 			Area:    areas[i],
 		})
 	}
@@ -237,6 +256,19 @@ func Detect(m mesh.Mesh, z float64) ([]Feature, error) {
 		return out[a].Area > out[b].Area
 	})
 	return out, nil
+}
+
+// sectionLoops picks the section primitive (ADR-025): a height strictly
+// between vertex levels is a band section (mesh.Slice); a height on a
+// vertex level is a face section (mesh.FaceLoops) — the boundary of the
+// upward-facing face(s) at that height.
+func sectionLoops(m mesh.Mesh, z float64) ([]kernel.Chain2, error) {
+	for _, lv := range m.VertexZs() {
+		if math.Abs(z-lv) <= kernel.AbsTol {
+			return m.FaceLoops(z)
+		}
+	}
+	return m.Slice(z)
 }
 
 // loopsCross returns the first point where an edge of a crosses an edge of

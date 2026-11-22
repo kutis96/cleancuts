@@ -279,6 +279,12 @@ func Plan(p Params) (Result, error) {
 	}
 	out := Result{SliceZ: sliceZ, CutZ: cutZ, SafeZ: safeZ}
 	for _, f := range features {
+		// ADR-021: a Boss is kept material — it is never milled. In profile
+		// mode it is simply not a feature to cut; in pocket mode it is the
+		// keep-out obstacle the region clears around (ADR-022/026).
+		if f.Kind == planning.Boss {
+			continue
+		}
 		if err := planFeature(p, &out, f, mode, coolant, safeZ, cutZ, label); err != nil {
 			return Result{}, err
 		}

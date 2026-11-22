@@ -2,6 +2,7 @@ package part
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -245,10 +246,10 @@ func TestEffectiveSliceZ(t *testing.T) {
 	}{
 		{"default is midpoint of top two levels", nil, 5, ""},
 		{"explicit between levels", ptr(2.5), 2.5, ""},
-		{"on the top face is refused", ptr(10), 0, "does not lie strictly inside"},
-		{"on the bottom face is refused", ptr(0), 0, "does not lie strictly inside"},
-		{"below the part is refused", ptr(-5), 0, "does not lie strictly inside"},
-		{"above the part is refused", ptr(15), 0, "does not lie strictly inside"},
+		{"on the top face is a face section (ADR-025)", ptr(10), 10, ""},
+		{"on the bottom face is a face section (ADR-025)", ptr(0), 0, ""},
+		{"below the part is refused", ptr(-5), 0, "outside the part"},
+		{"above the part is refused", ptr(15), 0, "outside the part"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -269,18 +270,16 @@ func TestEffectiveSliceZ(t *testing.T) {
 		})
 	}
 
-	t.Run("on an interior face is refused with a valid suggestion", func(t *testing.T) {
+	t.Run("on an interior face is a face section (ADR-025)", func(t *testing.T) {
 		m := stepped()
 		mustValidate(t, m)
 		part := Part{ID: "step", Mesh: "step.stl", SliceZ: ptr(5)}
-		_, err := part.EffectiveSliceZ(m)
-		if err == nil {
-			t.Fatal("expected a refusal for slice_z on an interior face")
+		got, err := part.EffectiveSliceZ(m)
+		if err != nil {
+			t.Fatalf("slice_z on an interior face is now a legal face section, got %v", err)
 		}
-		for _, want := range []string{"lies on a part face", "z=2.5"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("error %q should mention %q", err, want)
-			}
+		if got != 5 {
+			t.Fatalf("slice z = %g, want 5", got)
 		}
 	})
 
@@ -350,7 +349,12 @@ func TestDetectPlateProfileAndPocket(t *testing.T) {
 	}
 }
 
-func TestDetectWasherIslandsByParity(t *testing.T) {
+func TestDetectWasherKeepsSolidIsland(t *testing.T) {
+	// ADR-021: the island is solid material rising above the section —
+	// it is a Boss (kept, never milled), not a Profile to mill around.
+	// Milling its outline would cut through the solid island (over-cut,
+	// Law 7): the old parity rule called it a Profile, which was the
+	// unsafe reading.
 	m := washer()
 	mustValidate(t, m)
 	if !m.IsClosedMesh() {
@@ -364,18 +368,109 @@ func TestDetectWasherIslandsByParity(t *testing.T) {
 		t.Fatalf("want 3 features (profile, hole, island), got %d", len(feats))
 	}
 	want := []struct {
-		kind  planning.FeatureKind
-		depth int
-		area  float64
+		kind   planning.FeatureKind
+		depth  int
+		area   float64
+		parent int
 	}{
-		{planning.Profile, 0, 6400}, // 80×80
-		{planning.Pocket, 1, 2500},  // 50×50 void
-		{planning.Profile, 2, 400},  // 20×20 island (even depth = material)
+		{planning.Profile, 0, 6400, -1}, // 80×80
+		{planning.Pocket, 1, 2500, 0},   // 50×50 void (air above: no material)
+		{planning.Boss, 2, 400, 1},      // 20×20 solid island (material above)
 	}
 	for i, w := range want {
-		if feats[i].Kind != w.kind || feats[i].Depth != w.depth || feats[i].Area != w.area {
-			t.Fatalf("feature %d: got kind=%s depth=%d area=%g; want kind=%s depth=%d area=%g",
-				i, feats[i].Kind, feats[i].Depth, feats[i].Area, w.kind, w.depth, w.area)
+		if feats[i].Kind != w.kind || feats[i].Depth != w.depth || feats[i].Area != w.area || feats[i].Parent != w.parent {
+			t.Fatalf("feature %d: got kind=%s depth=%d area=%g parent=%d; want kind=%s depth=%d area=%g parent=%d",
+				i, feats[i].Kind, feats[i].Depth, feats[i].Area, feats[i].Parent,
+				w.kind, w.depth, w.area, w.parent)
+		}
+	}
+}
+
+func TestDetectSteppedFaceSections(t *testing.T) {
+	// stepped is two joined boxes (a 40×40×5 base, a 20×20×5 step on
+	// top): each top face is a face section of a single loop. (The
+	// boss-on-a-base case — a face with a hole — is the Testmesh case
+	// below.)
+	m := stepped()
+	mustValidate(t, m)
+
+	for _, zc := range []struct {
+		z    float64
+		area float64
+	}{
+		{5, 1600}, // base top: 40×40
+		{10, 400}, // step top: 20×20
+	} {
+		feats, err := Detect(m, zc.z)
+		if err != nil {
+			t.Fatalf("Detect at face z=%g: %v", zc.z, err)
+		}
+		if len(feats) != 1 || feats[0].Kind != planning.Profile || feats[0].Area != zc.area {
+			t.Fatalf("face z=%g: want one profile of area %g, got %+v", zc.z, zc.area, feats)
+		}
+	}
+
+	// Band sections: a single square loop (base width below z=5, step
+	// width above).
+	for _, zc := range []struct {
+		z    float64
+		area float64
+	}{
+		{2.5, 1600}, {7.5, 400},
+	} {
+		band, err := Detect(m, zc.z)
+		if err != nil {
+			t.Fatalf("Detect at band z=%g: %v", zc.z, err)
+		}
+		if len(band) != 1 || band[0].Kind != planning.Profile || band[0].Area != zc.area {
+			t.Fatalf("band z=%g: want one profile of area %g, got %+v", zc.z, zc.area, band)
+		}
+	}
+}
+
+func TestDetectTestmeshBossAndAnnulus(t *testing.T) {
+	// The friend's part: a Ø25 cylinder on a 50×50 base. At the base-top
+	// face (z=-10) the section is the square + the cylinder's circle; the
+	// circle is a Boss (kept), the annulus is the clearable region.
+	data, err := os.ReadFile("../../examples/parts/testmesh_cyl_on_base.stl")
+	if err != nil {
+		t.Fatalf("load testmesh: %v", err)
+	}
+	m, err := mesh.ParseSTL(data)
+	if err != nil {
+		t.Fatalf("parse testmesh: %v", err)
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("validate testmesh: %v", err)
+	}
+
+	feats, err := Detect(m, -10)
+	if err != nil {
+		t.Fatalf("Detect at face z=-10: %v", err)
+	}
+	if len(feats) != 2 {
+		t.Fatalf("want 2 features (base outline + cylinder circle), got %d", len(feats))
+	}
+	// Ordered: profile (depth 0) first, boss (depth 1) second.
+	if feats[0].Kind != planning.Profile || feats[0].Depth != 0 || feats[0].Area != 2500 {
+		t.Fatalf("feature 0: want profile 50×50 at depth 0, got %+v", feats[0])
+	}
+	if feats[1].Kind != planning.Boss || feats[1].Depth != 1 || feats[1].Parent != 0 {
+		t.Fatalf("feature 1: want boss at depth 1 inside the base, got %+v", feats[1])
+	}
+	// The circle: |area| ≈ π·12.5² = 490.87 (tessellated 289-gon).
+	if math.Abs(feats[1].Area-490.87) > 1.0 {
+		t.Fatalf("boss area = %g, want ≈ 490.87", feats[1].Area)
+	}
+
+	// Band sections see a single loop each (the square, or the circle).
+	for _, z := range []float64{-15, -5} {
+		band, err := Detect(m, z)
+		if err != nil {
+			t.Fatalf("Detect at band z=%g: %v", z, err)
+		}
+		if len(band) != 1 || band[0].Kind != planning.Profile {
+			t.Fatalf("band z=%g: want one profile, got %+v", z, band)
 		}
 	}
 }
@@ -389,13 +484,33 @@ func TestDetectRefusesIntersectingLoops(t *testing.T) {
 	}
 }
 
-func TestDetectPropagatesSliceErrors(t *testing.T) {
-	// A plane through a vertex is the clean-case refusal of mesh.Slice
-	// (ADR-017); Detect must surface it, not paper over it.
+func TestDetectFaceSectionAtTopFace(t *testing.T) {
+	// ADR-025: the plate's top face (z=10) is a legal face section: the
+	// 60×40 outline with the 20×20 hole boundary (a through-hole has no
+	// material above, so it stays a Pocket — the parity special case).
 	m := plateMesh(t)
-	_, err := Detect(m, 10)
-	if err == nil || !strings.Contains(err.Error(), "vertex") {
-		t.Fatalf("want the slice refusal at a face height, got %v", err)
+	feats, err := Detect(m, 10)
+	if err != nil {
+		t.Fatalf("Detect at face z=10: %v", err)
+	}
+	if len(feats) != 2 {
+		t.Fatalf("want 2 features (outline + hole), got %d", len(feats))
+	}
+	if feats[0].Kind != planning.Profile || feats[0].Area != 2400 {
+		t.Fatalf("feature 0: want profile 60×40, got %+v", feats[0])
+	}
+	if feats[1].Kind != planning.Pocket || feats[1].Area != 400 {
+		t.Fatalf("feature 1: want pocket 20×20 (through-hole: no material above), got %+v", feats[1])
+	}
+}
+
+func TestDetectDownwardFaceRefused(t *testing.T) {
+	// The plate's bottom face (z=0) is downward-facing: no upward face at
+	// that height — a precise refusal, not a silent wrong section.
+	m := plateMesh(t)
+	_, err := Detect(m, 0)
+	if err == nil || !strings.Contains(err.Error(), "no upward-facing face") {
+		t.Fatalf("want the downward-face refusal at z=0, got %v", err)
 	}
 }
 

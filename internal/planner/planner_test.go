@@ -503,9 +503,12 @@ func TestPlanPartOutsideStock(t *testing.T) {
 	}
 }
 
-// --- the island case (parity flows through the pipeline) --------------------
+// --- the island case (kept material is never milled, ADR-021) --------------
 
-func TestPlanIslandWasher(t *testing.T) {
+func TestPlanKeepsSolidIsland(t *testing.T) {
+	// The island is solid material rising above the section: it classifies
+	// as a Boss and is never milled (Law 7 — milling its outline would cut
+	// through the solid island). The plan covers profile + hole only.
 	p := Params{
 		Part: part.Part{ID: "washer", Name: "washer with island", Mesh: "washer.stl"},
 		Mesh: washer(),
@@ -523,8 +526,8 @@ func TestPlanIslandWasher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(out.Features) != 3 {
-		t.Fatalf("features = %d, want 3 (profile, hole, island)", len(out.Features))
+	if len(out.Features) != 2 {
+		t.Fatalf("features = %d, want 2 (profile, hole — the solid island is kept)", len(out.Features))
 	}
 	want := []struct {
 		kind  planning.FeatureKind
@@ -532,7 +535,6 @@ func TestPlanIslandWasher(t *testing.T) {
 	}{
 		{planning.Profile, 0},
 		{planning.Pocket, 1},
-		{planning.Profile, 2}, // the island: even depth = material contour
 	}
 	for i, w := range want {
 		f := out.Features[i]
@@ -549,12 +551,79 @@ func TestPlanIslandWasher(t *testing.T) {
 		}
 	}
 	// Offsets (r=5, CCW spindle, climb): profile 90×90 CW (−8100),
-	// pocket 40×40 CCW (+1600), island 30×30 CW (−900).
-	wantAreas := []float64{-8100, +1600, -900}
+	// pocket 40×40 CCW (+1600).
+	wantAreas := []float64{-8100, +1600}
 	for i, wa := range wantAreas {
 		a := cuttingArea(t, out.Features[i].Path)
 		if math.Abs(a-wa) > 1e-9 {
 			t.Fatalf("feature %d cutting area = %g, want %g", i, a, wa)
+		}
+	}
+}
+
+// --- the Testmesh case (face section + boss, ADR-021/025) -----------------
+
+func testmesh(t *testing.T) mesh.Mesh {
+	t.Helper()
+	data, err := os.ReadFile("../../examples/parts/testmesh_cyl_on_base.stl")
+	if err != nil {
+		t.Fatalf("load testmesh: %v", err)
+	}
+	m, err := mesh.ParseSTL(data)
+	if err != nil {
+		t.Fatalf("parse testmesh: %v", err)
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("validate testmesh: %v", err)
+	}
+	return m
+}
+
+func TestPlanTestmeshProfileSkipsBoss(t *testing.T) {
+	// The friend's part: profile mode at the base-top face (z=-10) mills
+	// the 50×50 base outline and leaves the cylinder (a Boss) untouched —
+	// never milled (ADR-021, Law 7). The annulus clear is the pocket
+	// operation (ADR-022/026, a later slice).
+	slice, cut := -10.0, -15.0
+	p := Params{
+		Part: part.Part{ID: "testmesh", Name: "cylinder on base", Mesh: "testmesh.stl", SliceZ: &slice, CutZ: &cut},
+		Mesh: testmesh(t),
+		Stock: stock.Stock{
+			ID:    "block-70x70x30",
+			Shape: stock.ShapeBox,
+			Box:   &stock.Box{Min: kernel.P3(-35, -35, -25), Max: kernel.P3(35, 35, 5)},
+		},
+		Tool:    endmill10(),
+		Machine: mill(),
+		Feed:    500,
+		Spindle: 8000,
+	}
+	out, err := Plan(p)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(out.Features) != 1 {
+		t.Fatalf("features = %d, want 1 (the base outline; the boss is kept)", len(out.Features))
+	}
+	f := out.Features[0]
+	if f.Feature.Kind != planning.Profile || f.Feature.Area != 2500 {
+		t.Fatalf("feature 0 = %+v, want the 2500 mm² base profile", f.Feature)
+	}
+	// Offset outward by r=5: a 60×60 contour (area 3600).
+	a := cuttingArea(t, f.Path)
+	if math.Abs(math.Abs(a)-3600) > 1e-9 {
+		t.Fatalf("cutting |area| = %g, want 3600 (60×60 offset outline)", a)
+	}
+	// No move may enter the cylinder footprint (radius 12.5 + tool 5 =
+	// 17.5 from the origin for a tool centre).
+	for i, mv := range f.Path.Moves {
+		if mv.Kind == moves.KindRapid {
+			continue
+		}
+		for _, q := range []kernel.Point2{P(mv.From.X, mv.From.Y), P(mv.To.X, mv.To.Y)} {
+			if math.Hypot(q.X, q.Y) < 17.5-1e-9 {
+				t.Fatalf("move %d point (%g,%g) is inside the kept cylinder + tool radius", i, q.X, q.Y)
+			}
 		}
 	}
 }
